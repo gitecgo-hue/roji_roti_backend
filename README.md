@@ -4,7 +4,6 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688.svg)
 ![MongoDB](https://img.shields.io/badge/MongoDB_Atlas-Cloud-47A248.svg)
 ![Authentication](https://img.shields.io/badge/Auth-JWT%20%7C%20OTP-critical)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 **Roji Roti** is a localized, high-performance platform built to bridge the gap between blue-collar workers (carpenters, plumbers, electricians, drivers, masons) and employers in India. 
 
@@ -181,4 +180,3 @@ To deploy this backend to a live server (like Render, Heroku, or AWS):
 ---
 
 *Architected and built with ❤️ in Indore, Madhya Pradesh, India.*
-```
