@@ -1,10 +1,3 @@
-Here is the **extended, ultimate version** of your README. 
-
-I have massively expanded it by adding deeper feature descriptions, a complete architecture breakdown, detailed setup instructions for third-party keys (like Razorpay), deployment steps, and a guide on how to test the API using Postman/Swagger. 
-
-You can replace your current `README.md` with this comprehensive version:
-
-```markdown
 # 🛠️ Roji Roti (रोजी रोटी) - Advanced Backend API
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
