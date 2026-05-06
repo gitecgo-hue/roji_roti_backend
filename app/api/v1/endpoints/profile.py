@@ -17,7 +17,7 @@ async def upload_profile_picture(
     and updates the user's profile.
     """
     # 1. Security Check: Is it actually an image?
-    if not file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid file format. Please upload an image."
@@ -51,8 +51,7 @@ async def upload_profile_picture(
         )
 
     # 4. Save the new AWS URL to MongoDB
-    user.profile_picture_url = image_url
-    await user.save()
+    await user.update({"$set": {"profile_picture_url": image_url}})
 
     return {
         "message": "Profile picture updated successfully!",

@@ -14,14 +14,10 @@ from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.api.v1.router import api_router
-from app.api.v1.endpoints import employers, webhooks, payments
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
-
-# Router Imports
-from app.api.v1.endpoints import payments, auth, employees, employers, jobs
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +36,7 @@ class LanguageMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # --- Startup Events ---
     logger.info("Initializing application services...")
-    # 👇 This is where Beanie gets initialized under the hood! 👇
+    # This is where Beanie gets initialized under the hood!
     await connect_to_mongo() 
     start_scheduler()
     
@@ -61,7 +57,12 @@ app = FastAPI(
 
 # --- Rate Limiter Configuration ---
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+def rate_limit_exceeded_handler(request: Request, exc: Exception):
+    from slowapi import _rate_limit_exceeded_handler
+    return _rate_limit_exceeded_handler(request, exc)
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # --- Middleware Stack ---
 app.add_middleware(LanguageMiddleware)
@@ -74,13 +75,8 @@ app.add_middleware(
 )
 
 # --- Routing ---
-app.include_router(api_router, prefix=settings.API_V1_STR)
-app.include_router(payments.router, prefix="/api/v1/payments", tags=["Payments"])
-app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["Jobs"])
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
-app.include_router(employees.router, prefix="/api/v1/employees", tags=["Employees"])
-app.include_router(employers.router, prefix="/api/v1/employers", tags=["Employers"])
-app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["Webhooks"])
+app.include_router(api_router, prefix="/api/v1")
+
 
 @app.get("/")
 async def root():
