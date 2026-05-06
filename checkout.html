@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Roji Roti Test Checkout</title>
+</head>
+<body style="text-align: center; padding: 50px; font-family: Arial;">
+
+    <h2>Complete your Pro Subscription</h2>
+    <button id="rzp-button1" style="padding: 15px 30px; font-size: 18px; background: #528FF0; color: white; border: none; border-radius: 5px; cursor: pointer;">
+        Pay Now
+    </button>
+
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script>
+        var options = {
+            "key": "rzp_test_SjjhFIqOpCV19p", // 🚨 Paste your Key ID here
+            "amount": "99900",               // 999 INR in paise
+            "currency": "INR",
+            "name": "Roji Roti Premium",
+            "description": "Pro Tier Upgrade",
+            "order_id": "order_Sk7d2Y1AFqZlJZ", // 🚨 Paste your Postman Order ID here
+            "handler": function (response){
+                alert("Payment Successful! Razorpay is now pinging your webhook...");
+            }
+        };
+        var rzp1 = new Razorpay(options);
+        document.getElementById('rzp-button1').onclick = function(e){
+            rzp1.open();
+            e.preventDefault();
+        }
+    </script>
+</body>
+</html>
