@@ -13,12 +13,12 @@
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script>
         var options = {
-            "key": "rzp_test_SjjhFIqOpCV19p", // 🚨 Paste your Key ID here
+            "key": "rzp_test_SjjhFIqOpCV19p", 
             "amount": "99900",               // 999 INR in paise
             "currency": "INR",
             "name": "Roji Roti Premium",
             "description": "Pro Tier Upgrade",
-            "order_id": "order_Sk7d2Y1AFqZlJZ", // 🚨 Paste your Postman Order ID here
+            "order_id": "order_Sk7d2Y1AFqZlJZ",
             "handler": function (response){
                 alert("Payment Successful! Razorpay is now pinging your webhook...");
             }
