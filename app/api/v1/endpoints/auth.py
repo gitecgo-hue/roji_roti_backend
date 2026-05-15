@@ -2,9 +2,9 @@ import re
 import random
 import string
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, status, Request
 from bson import ObjectId
 
 from app.core.limiter import limiter
@@ -24,9 +24,9 @@ router = APIRouter()
 # --- Pydantic Schemas ---
 
 class UnifiedLoginRequest(BaseModel):
-    identifier: str = Field(..., description="Email address or Phone number")
-    password: Optional[str] = None
-    otp_code: Optional[str] = None
+    identifier: str = Field(..., description="Mobile number (Primary) or Email (Secondary)")
+    otp_code: Optional[str] = Field(None, description="Primary authentication method")
+    password: Optional[str] = Field(None, description="Secondary/Fallback authentication method")
 
 class OTPRequest(BaseModel):
     identifier: str
@@ -37,9 +37,7 @@ def is_email(identifier: str) -> bool:
     return bool(re.match(r"[^@]+@[^@]+\.[^@]+", identifier))
 
 async def get_user_by_identifier(identifier: str):
-    """
-    Utility to find a user (Employer or Employee) by email or phone.
-    """
+    """Utility to find a user (Employer or Employee) by phone or email."""
     if is_email(identifier):
         return await Employer.find_one(Employer.email == identifier) or \
                await Employee.find_one(Employee.email == identifier)
@@ -54,65 +52,71 @@ async def get_user_by_identifier(identifier: str):
 @limiter.limit("5/minute")
 async def unified_login(data: UnifiedLoginRequest, request: Request):
     identity_type = "email" if is_email(data.identifier) else "phone"
-    
     user = await get_user_by_identifier(data.identifier)
 
     # -----------------------------------------------------------------------
-    # SEAMLESS FLOW: Handle Unregistered Users
+    # 1. HANDLE UNREGISTERED USERS (Mobile Primary Flow)
     # -----------------------------------------------------------------------
     if not user:
-        # If it's a phone number, assume they are a new worker trying to use the app
         if identity_type == "phone":
+            # Seamless Mobile Flow: Tell the frontend this is a new user
             return {
                 "status": "unregistered",
-                "message": "User not found. Redirecting to registration...",
+                "message": "Mobile number not found. Redirecting to registration...",
                 "action": "redirect_to_register",
                 "phone_provided": data.identifier 
             }
         else:
-            # If it's an email, we still throw a standard 404 (Employers usually register via a different flow)
-            raise HTTPException(status_code=404, detail="User not found.")
+            # Secondary Email Flow: Standard hard rejection
+            raise HTTPException(status_code=404, detail="Email not registered.")
 
     # -----------------------------------------------------------------------
-    # Standard Login Flow for Registered Users
+    # 2. HANDLE REGISTERED USERS
     # -----------------------------------------------------------------------
-    
     if not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Account is suspended.")
 
     user_type = "employer" if isinstance(user, Employer) else "employee"
 
-    # Password Flow
-    if data.password:
-        hashed_pass = getattr(user, "hashed_password", None)
-        
-        if not hashed_pass or not verify_password(data.password, hashed_pass):
-            raise HTTPException(status_code=400, detail="Invalid credentials.")
+    # PRIMARY AUTHENTICATION: OTP 
+    if data.otp_code:
+        if identity_type == "phone":
+            clean_phone = data.identifier[-10:]
+            # Look up the OTP record for this specific phone number
+            otp_record = await OTP.find_one(OTP.phone == clean_phone)
             
-    # OTP Flow
-    elif data.otp_code:
-        if identity_type == "email":
+            if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
+                raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
+            
+            # OTP is valid, consume it
+            await otp_record.delete()
+            
+        else:
+            # Email OTP verification
             if not getattr(user, "otp_code") or user.otp_code != data.otp_code:
                 raise HTTPException(status_code=400, detail="Invalid Email OTP.")
             if user.otp_expires_at < datetime.utcnow():
                 raise HTTPException(status_code=400, detail="Email OTP expired.")
             
+            # Consume Email OTP
             user.otp_code = None
             user.otp_expires_at = None
             await user.save()
-        else:
-            otp_record = await OTP.find_one(OTP.phone == data.identifier[-10:], OTP.user_type == user_type)
-            if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
-                raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
-            await otp_record.delete()
-    
-    else:
-        raise HTTPException(status_code=400, detail="Either password or OTP is required.")
 
-    # Success: Generate Token
+    # SECONDARY AUTHENTICATION: Password
+    elif data.password:
+        hashed_pass = getattr(user, "hashed_password", None)
+        if not hashed_pass or not verify_password(data.password, hashed_pass):
+            raise HTTPException(status_code=400, detail="Invalid credentials.")
+            
+    else:
+        raise HTTPException(status_code=400, detail="An OTP code or password is required to login.")
+
+    # -----------------------------------------------------------------------
+    # 3. SUCCESS - GENERATE TOKEN
+    # -----------------------------------------------------------------------
     access_token = create_access_token(subject=str(user.id), user_type=user_type)
     
-    # Return enriched response for the frontend
     return {
         "status": "success",
         "access_token": access_token, 
@@ -128,28 +132,28 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
 @limiter.limit("3/minute")
 async def request_otp_challenge(data: OTPRequest, request: Request):
     """
-    Universal OTP Request with a 60-second cooldown per user.
+    Universal OTP Request. Prioritizes Mobile numbers.
+    Allows sending OTP to unregistered mobile numbers for verification prior to registration.
     """
     identifier = data.identifier
     now = datetime.utcnow()
-    
-    # 1. User Cooldown Check
     user = await get_user_by_identifier(identifier)
     
+    # Cooldown Check (Only if user exists in the DB)
     if user and getattr(user, "last_otp_requested_at", None):
-        time_since_last_request = now - user.last_otp_requested_at
-        if time_since_last_request < timedelta(seconds=60):
+        if now - user.last_otp_requested_at < timedelta(seconds=60):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS, 
                 detail="Too many requests. Please wait 60 seconds."
             )
     
-    # 2. Proceed with OTP generation
     otp_code = ''.join(random.choices(string.digits, k=6))
 
     if is_email(identifier):
+        # --- SECONDARY: Email Flow ---
         if not user:
-            return {"message": "If account exists, OTP has been sent to your email."}
+            # Security best practice: Don't reveal if email exists or not
+            return {"message": "If this email is registered, an OTP has been sent."}
 
         user.otp_code = otp_code
         user.otp_expires_at = now + timedelta(minutes=5)
@@ -157,21 +161,29 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         await user.save()
         
         await EmailService.send_otp_email(to_email=identifier, otp=otp_code)
-        dest = "email"
+        dest_type = "email"
+        
     else:
+        # --- PRIMARY: Mobile Flow ---
         clean_phone = identifier[-10:]
         hashed_otp = get_password_hash(otp_code)
         
+        # Update user cooldown if they are already registered
+        user_type = "unknown" 
         if user:
             user.last_otp_requested_at = now
             await user.save()
+            user_type = "employer" if isinstance(user, Employer) else "employee"
 
-        user_type = "employer" if isinstance(user, Employer) else "employee"
+        # Delete any old OTPs for this phone number
         await OTP.find(OTP.phone == clean_phone).delete() 
+        
+        # Save new OTP (Works for both registered and unregistered phones)
         new_otp = OTP(phone=clean_phone, hashed_code=hashed_otp, user_type=user_type)
         await new_otp.insert()
         
+        # Trigger SMS API
         await SMSService.send_otp(identifier, otp_code)
-        dest = "phone"
+        dest_type = "mobile number"
 
-    return {"message": f"OTP has been sent to your {dest}."}
+    return {"message": f"OTP has been successfully sent to your {dest_type}."}
