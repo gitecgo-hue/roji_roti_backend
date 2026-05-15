@@ -233,14 +233,35 @@ async def register_company(data: CompanyRegistration):
 @router.get("/dashboard", response_model=EmployerDashboardResponse)
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
-    active_jobs = await Job.find(Job.employer_id == str(current_employer.id), Job.is_active == True).count()
-    total_apps = await Application.find(Application.job_id == {"$in": [str(j.id) for j in await Job.find(Job.employer_id == str(current_employer.id)).to_list()]}).count()
-    shortlisted = await Application.find(Application.status == ApplicationStatus.SHORTLISTED).count() # Simplified for brevity
+    
+    # 1. Get all jobs this employer posted (saves database calls)
+    my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
+    my_job_ids = [str(job.id) for job in my_jobs]
+    
+    # Count how many are active from the list we just fetched
+    active_jobs = sum(1 for job in my_jobs if job.is_active)
+    
+    # 2. BYPASS: Use a raw dictionary query instead of Application.job_id
+    if my_job_ids:
+        total_apps = await Application.find(
+            {"job_id": {"$in": my_job_ids}}
+        ).count()
+        
+        # Also apply the bypass to the shortlisted count so it only counts THIS employer's apps
+        shortlisted = await Application.find(
+            {"job_id": {"$in": my_job_ids}, "status": ApplicationStatus.SHORTLISTED}
+        ).count()
+    else:
+        # If they haven't posted any jobs, they naturally have 0 applications
+        total_apps = 0
+        shortlisted = 0
 
     days_left = max(0, (sub.expiry_date - datetime.utcnow()).days) if sub.expiry_date else 0
+    
     return EmployerDashboardResponse(
         company_name=current_employer.company_name or current_employer.name,
-        subscription_tier=sub.plan_type.capitalize(),        is_active=sub.is_active,
+        subscription_tier=sub.plan_type.capitalize(),        
+        is_active=sub.is_active,
         days_left=days_left,
         expiry_date=sub.expiry_date,
         active_jobs_count=active_jobs,

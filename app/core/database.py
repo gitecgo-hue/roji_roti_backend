@@ -5,9 +5,8 @@ from beanie import init_beanie
 from app.core.config import settings
 
 # Models
-from app.models.employee import Employee
+from app.models.employee import Application, Employee
 from app.models.employer import Employer
-from app.models.application import JobApplication
 from app.models.job import Job
 from app.models.rating import Rating
 from app.models.category import Category       
@@ -43,7 +42,7 @@ async def connect_to_mongo():
             Employee,
             Employer,         
             Job,
-            JobApplication,
+            Application,
             Notification,         
             Rating,
             Category,         
