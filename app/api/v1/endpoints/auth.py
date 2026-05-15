@@ -10,6 +10,7 @@ from bson import ObjectId
 from app.core.limiter import limiter
 from app.models.employee import Employee
 from app.models.employer import Employer
+from app.models.admin import Admin  # <-- Added Admin model import
 from app.models.auth import OTP 
 from app.core.security import (
     get_password_hash, 
@@ -37,16 +38,91 @@ def is_email(identifier: str) -> bool:
     return bool(re.match(r"[^@]+@[^@]+\.[^@]+", identifier))
 
 async def get_user_by_identifier(identifier: str):
-    """Utility to find a user (Employer or Employee) by phone or email."""
+    """Utility to find a user (Admin, Employer, or Employee) by phone or email."""
     if is_email(identifier):
-        return await Employer.find_one(Employer.email == identifier) or \
+        return await Admin.find_one(Admin.email == identifier) or \
+               await Employer.find_one(Employer.email == identifier) or \
                await Employee.find_one(Employee.email == identifier)
     else:
         clean_phone = identifier[-10:]
-        return await Employer.find_one(Employer.phone == clean_phone) or \
+        return await Admin.find_one(Admin.phone == clean_phone) or \
+               await Employer.find_one(Employer.phone == clean_phone) or \
                await Employee.find_one(Employee.phone == clean_phone)
 
-# --- Unified Authentication Endpoint ---
+
+# ==============================================================================
+# --- ADMIN AUTHENTICATION ENDPOINT ---
+# ==============================================================================
+
+@router.post("/admin/login", response_model=dict)
+@limiter.limit("5/minute")
+async def admin_login(data: UnifiedLoginRequest, request: Request):
+    """
+    Highly secure login endpoint strictly for System Administrators.
+    """
+    identity_type = "email" if is_email(data.identifier) else "phone"
+    
+    # 1. STRICT LOOKUP: Only check the Admin collection
+    if identity_type == "email":
+        admin_user = await Admin.find_one(Admin.email == data.identifier)
+    else:
+        clean_phone = data.identifier[-10:]
+        admin_user = await Admin.find_one(Admin.phone == clean_phone)
+
+    # Security: Do NOT redirect admins. Just fail immediately if not found.
+    if not admin_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid administrator credentials."
+        )
+
+    if not admin_user.is_active:
+        raise HTTPException(status_code=403, detail="Admin account suspended.")
+
+    # 2. PRIMARY AUTH: OTP
+    if data.otp_code:
+        if identity_type == "phone":
+            clean_phone = data.identifier[-10:]
+            otp_record = await OTP.find_one(OTP.phone == clean_phone, OTP.user_type == "admin")
+            
+            if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
+                raise HTTPException(status_code=401, detail="Invalid or expired SMS OTP.")
+            await otp_record.delete()
+            
+        else:
+            if not admin_user.otp_code or admin_user.otp_code != data.otp_code:
+                raise HTTPException(status_code=401, detail="Invalid Email OTP.")
+            if admin_user.otp_expires_at < datetime.utcnow():
+                raise HTTPException(status_code=401, detail="Email OTP expired.")
+            
+            admin_user.otp_code = None
+            admin_user.otp_expires_at = None
+            await admin_user.save()
+
+    # 3. SECONDARY AUTH: Password
+    elif data.password:
+        if not verify_password(data.password, admin_user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid administrator credentials.")
+            
+    else:
+        raise HTTPException(status_code=400, detail="OTP or Password required.")
+
+    # 4. SUCCESS: Generate Admin Token
+    access_token = create_access_token(subject=str(admin_user.id), user_type="admin")
+    
+    return {
+        "status": "success",
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "user_type": "admin",
+        "role": admin_user.role,
+        "user_name": admin_user.name
+    }
+
+
+# ==============================================================================
+# --- PUBLIC UNIFIED AUTHENTICATION ENDPOINT ---
+# ==============================================================================
 
 @router.post("/login", response_model=dict)
 @limiter.limit("5/minute")
@@ -54,9 +130,14 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     identity_type = "email" if is_email(data.identifier) else "phone"
     user = await get_user_by_identifier(data.identifier)
 
-    # -----------------------------------------------------------------------
+    # Security Upgrade: Block Admins from using the public login portal
+    if isinstance(user, Admin):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Administrators must use the dedicated /admin/login portal."
+        )
+
     # 1. HANDLE UNREGISTERED USERS (Mobile Primary Flow)
-    # -----------------------------------------------------------------------
     if not user:
         if identity_type == "phone":
             # Seamless Mobile Flow: Tell the frontend this is a new user
@@ -70,9 +151,7 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
             # Secondary Email Flow: Standard hard rejection
             raise HTTPException(status_code=404, detail="Email not registered.")
 
-    # -----------------------------------------------------------------------
     # 2. HANDLE REGISTERED USERS
-    # -----------------------------------------------------------------------
     if not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Account is suspended.")
 
@@ -82,23 +161,19 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     if data.otp_code:
         if identity_type == "phone":
             clean_phone = data.identifier[-10:]
-            # Look up the OTP record for this specific phone number
             otp_record = await OTP.find_one(OTP.phone == clean_phone)
             
             if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
                 raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
             
-            # OTP is valid, consume it
             await otp_record.delete()
             
         else:
-            # Email OTP verification
             if not getattr(user, "otp_code") or user.otp_code != data.otp_code:
                 raise HTTPException(status_code=400, detail="Invalid Email OTP.")
             if user.otp_expires_at < datetime.utcnow():
                 raise HTTPException(status_code=400, detail="Email OTP expired.")
             
-            # Consume Email OTP
             user.otp_code = None
             user.otp_expires_at = None
             await user.save()
@@ -112,9 +187,7 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     else:
         raise HTTPException(status_code=400, detail="An OTP code or password is required to login.")
 
-    # -----------------------------------------------------------------------
     # 3. SUCCESS - GENERATE TOKEN
-    # -----------------------------------------------------------------------
     access_token = create_access_token(subject=str(user.id), user_type=user_type)
     
     return {
@@ -126,20 +199,23 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
     }
 
-# --- OTP Request System ---
+
+# ==============================================================================
+# --- UNIVERSAL OTP REQUEST SYSTEM ---
+# ==============================================================================
 
 @router.post("/request-otp")
 @limiter.limit("3/minute")
 async def request_otp_challenge(data: OTPRequest, request: Request):
     """
     Universal OTP Request. Prioritizes Mobile numbers.
-    Allows sending OTP to unregistered mobile numbers for verification prior to registration.
+    Allows sending OTP to unregistered mobile numbers, and handles Admin OTPs securely.
     """
     identifier = data.identifier
     now = datetime.utcnow()
     user = await get_user_by_identifier(identifier)
     
-    # Cooldown Check (Only if user exists in the DB)
+    # Cooldown Check
     if user and getattr(user, "last_otp_requested_at", None):
         if now - user.last_otp_requested_at < timedelta(seconds=60):
             raise HTTPException(
@@ -152,7 +228,6 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
     if is_email(identifier):
         # --- SECONDARY: Email Flow ---
         if not user:
-            # Security best practice: Don't reveal if email exists or not
             return {"message": "If this email is registered, an OTP has been sent."}
 
         user.otp_code = otp_code
@@ -168,17 +243,22 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         clean_phone = identifier[-10:]
         hashed_otp = get_password_hash(otp_code)
         
-        # Update user cooldown if they are already registered
+        # Determine exact user type for the OTP record
         user_type = "unknown" 
         if user:
             user.last_otp_requested_at = now
             await user.save()
-            user_type = "employer" if isinstance(user, Employer) else "employee"
+            if isinstance(user, Admin):
+                user_type = "admin"
+            elif isinstance(user, Employer):
+                user_type = "employer"
+            else:
+                user_type = "employee"
 
         # Delete any old OTPs for this phone number
         await OTP.find(OTP.phone == clean_phone).delete() 
         
-        # Save new OTP (Works for both registered and unregistered phones)
+        # Save new OTP
         new_otp = OTP(phone=clean_phone, hashed_code=hashed_otp, user_type=user_type)
         await new_otp.insert()
         
