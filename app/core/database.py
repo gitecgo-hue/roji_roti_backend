@@ -5,6 +5,7 @@ from beanie import init_beanie
 from app.core.config import settings
 
 # Models
+from app.models.admin import Admin
 from app.models.employee import Application, Employee
 from app.models.employer import Employer
 from app.models.job import Job
@@ -39,6 +40,7 @@ async def connect_to_mongo():
     await init_beanie(
         database=database,
         document_models=[
+            Admin,
             Employee,
             Employer,         
             Job,

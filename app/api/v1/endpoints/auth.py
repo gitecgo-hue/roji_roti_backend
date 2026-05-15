@@ -40,15 +40,16 @@ def is_email(identifier: str) -> bool:
 async def get_user_by_identifier(identifier: str):
     """Utility to find a user (Admin, Employer, or Employee) by phone or email."""
     if is_email(identifier):
-        return await Admin.find_one(Admin.email == identifier) or \
-               await Employer.find_one(Employer.email == identifier) or \
-               await Employee.find_one(Employee.email == identifier)
+        # BYPASS: Use raw dictionary queries
+        return await Admin.find_one({"email": identifier}) or \
+               await Employer.find_one({"email": identifier}) or \
+               await Employee.find_one({"email": identifier})
     else:
         clean_phone = identifier[-10:]
-        return await Admin.find_one(Admin.phone == clean_phone) or \
-               await Employer.find_one(Employer.phone == clean_phone) or \
-               await Employee.find_one(Employee.phone == clean_phone)
-
+        # BYPASS: Use raw dictionary queries
+        return await Admin.find_one({"phone": clean_phone}) or \
+               await Employer.find_one({"phone": clean_phone}) or \
+               await Employee.find_one({"phone": clean_phone})
 
 # ==============================================================================
 # --- ADMIN AUTHENTICATION ENDPOINT ---
@@ -62,12 +63,12 @@ async def admin_login(data: UnifiedLoginRequest, request: Request):
     """
     identity_type = "email" if is_email(data.identifier) else "phone"
     
-    # 1. STRICT LOOKUP: Only check the Admin collection
+    # 1. STRICT LOOKUP: Use raw dictionary queries
     if identity_type == "email":
-        admin_user = await Admin.find_one(Admin.email == data.identifier)
+        admin_user = await Admin.find_one({"email": data.identifier})
     else:
         clean_phone = data.identifier[-10:]
-        admin_user = await Admin.find_one(Admin.phone == clean_phone)
+        admin_user = await Admin.find_one({"phone": clean_phone})
 
     # Security: Do NOT redirect admins. Just fail immediately if not found.
     if not admin_user:
@@ -83,7 +84,7 @@ async def admin_login(data: UnifiedLoginRequest, request: Request):
     if data.otp_code:
         if identity_type == "phone":
             clean_phone = data.identifier[-10:]
-            otp_record = await OTP.find_one(OTP.phone == clean_phone, OTP.user_type == "admin")
+            otp_record = await OTP.find_one({"phone": clean_phone, "user_type": "admin"})
             
             if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
                 raise HTTPException(status_code=401, detail="Invalid or expired SMS OTP.")
@@ -161,8 +162,8 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     if data.otp_code:
         if identity_type == "phone":
             clean_phone = data.identifier[-10:]
-            otp_record = await OTP.find_one(OTP.phone == clean_phone)
-            
+            otp_record = await OTP.find_one({"phone": clean_phone, "user_type": "admin"})
+
             if not otp_record or not verify_password(data.otp_code, otp_record.hashed_code):
                 raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
             
@@ -256,7 +257,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
                 user_type = "employee"
 
         # Delete any old OTPs for this phone number
-        await OTP.find(OTP.phone == clean_phone).delete() 
+        await OTP.find({"phone": clean_phone}).delete() 
         
         # Save new OTP
         new_otp = OTP(phone=clean_phone, hashed_code=hashed_otp, user_type=user_type)
