@@ -318,7 +318,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
     clean_phone = identifier[-10:] if not is_email(identifier) else None
 
     # =================================================================
-    # 🛑 DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
+    # DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
     # =================================================================
     TEST_ACCOUNTS = {
         "9999999999": "123456", # Your Root Admin
@@ -393,7 +393,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
             )
             await new_otp.insert()
         
-        # 🛑 ONLY trigger the real SMS API if it is NOT a dummy account
+        # ONLY trigger the real SMS API if it is NOT a dummy account
         if not is_test_account:
             await SMSService.send_otp(identifier, otp_code)
             
