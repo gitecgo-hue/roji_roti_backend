@@ -6,7 +6,8 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.models.employer import Employer
 from app.models.employee import Employee
-from app.models.auth import TokenBlacklist  # <--- Added Import
+from app.models.admin import Admin  # <--- Added Import
+from app.models.auth import TokenBlacklist  
 from app.core.security import ALGORITHM
 
 # --- OAuth2 Configuration ---
@@ -60,7 +61,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # --- Role-Specific Dependencies ---
 
-async def get_current_employer(user_info = Depends(get_current_user)) -> Employer:
+async def get_current_employer(user_info: dict = Depends(get_current_user)) -> Employer:
     """Ensures the user is an Employer and exists in the database."""
     employer = await Employer.get(user_info["id"])
     if not employer or user_info["user_type"] != "employer":
@@ -70,7 +71,7 @@ async def get_current_employer(user_info = Depends(get_current_user)) -> Employe
         )
     return employer
 
-async def get_current_employee(user_info = Depends(get_current_user)) -> Employee:
+async def get_current_employee(user_info: dict = Depends(get_current_user)) -> Employee:
     """Ensures the user is a Worker (Employee) and exists in the database."""
     employee = await Employee.get(user_info["id"])
     if not employee or user_info["user_type"] != "employee":
@@ -80,15 +81,22 @@ async def get_current_employee(user_info = Depends(get_current_user)) -> Employe
         )
     return employee
 
-async def get_current_admin(current_user: Employer = Depends(get_current_employer)) -> Employer:
+async def get_current_admin(user_info: dict = Depends(get_current_user)) -> Admin:
     """
-    Checks if the authenticated Employer has Admin privileges.
-    Uses get_current_employer first to ensure they exist and are an employer,
-    then checks the is_admin attribute on the model.
+    Absolute Security Gate: Ensures the token belongs to an active System Administrator.
     """
-    if not getattr(current_user, "is_admin", False):
+    if user_info["user_type"] != "admin":
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied. Admin privileges required."
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Access denied. System Administrator privileges required."
         )
-    return current_user
+        
+    admin_user = await Admin.get(user_info["id"])
+    
+    if not admin_user or not getattr(admin_user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Admin account is missing or suspended."
+        )
+        
+    return admin_user

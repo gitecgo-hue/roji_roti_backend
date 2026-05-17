@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, EmailStr, Field
 
 # Models & Services
 from app.services.admin import AdminService
@@ -10,6 +11,7 @@ from app.services.reports import ReportService
 from app.services.audit import AuditService 
 from app.models.employee import Employee
 from app.models.employer import Employer, EmployerType, SubscriptionTier
+from app.models.admin import Admin  # <--- Added Admin Model Import
 from app.models.job import Job
 from app.models.subscriptions import Subscription
 from app.models.category import Category
@@ -25,10 +27,83 @@ from app.schemas.report import ComprehensiveReport
 
 router = APIRouter()
 
-# --- Reporting & Insights ---
+# =====================================================================
+# PYDANTIC SCHEMAS
+# =====================================================================
+
+class AdminCreateRequest(BaseModel):
+    name: str = Field(..., description="Full name of the new administrator")
+    email: EmailStr
+    phone: str = Field(..., description="10-digit mobile number for OTP login")
+    role: str = Field(default="moderator", description="e.g., 'super_admin', 'moderator', 'support'")
+
+
+# =====================================================================
+# ADMIN ACCOUNT MANAGEMENT
+# =====================================================================
+
+@router.post("/create", status_code=status.HTTP_201_CREATED)
+async def create_new_admin(
+    data: AdminCreateRequest,
+    # THE GUARD: Only existing admins can run this function!
+    current_admin: Admin = Depends(get_current_admin) 
+):
+    """
+    Restricted Endpoint: Allows an existing Super Admin to authorize and 
+    create a new administrator account in the system.
+    """
+    # 1. Enforce Role Hierarchy (Optional: Only super_admins can make other admins)
+    if getattr(current_admin, "role", "moderator") != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Only Super Admins have permission to create new administrative accounts."
+        )
+
+    clean_phone = data.phone[-10:]
+
+    # 2. Prevent Cross-Contamination & Duplicates
+    phone_taken = await Admin.find_one({"phone": clean_phone}) or \
+                  await Employer.find_one({"phone": clean_phone}) or \
+                  await Employee.find_one({"phone": clean_phone})
+                  
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This phone number is already actively registered in the Roji Roti system."
+        )
+
+    email_taken = await Admin.find_one({"email": data.email})
+    if email_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An administrator with this email already exists."
+        )
+
+    # 3. Create the New Admin (No password needed, they will log in via OTP!)
+    new_admin = Admin(
+        name=data.name,
+        email=data.email,
+        phone=clean_phone,
+        role=data.role,
+        is_active=True
+    )
+    
+    await new_admin.insert()
+
+    return {
+        "status": "success",
+        "message": f"Administrator '{new_admin.name}' successfully created.",
+        "admin_id": str(new_admin.id),
+        "instructions": "The new administrator can now log in immediately using their mobile number."
+    }
+
+
+# =====================================================================
+# REPORTING & INSIGHTS
+# =====================================================================
 
 @router.get("/stats", response_model=AdminDashboardStats)
-async def get_system_stats(admin: Employer = Depends(get_current_admin)):
+async def get_system_stats(admin: Admin = Depends(get_current_admin)):
     """ Aggregates high-level platform data and real revenue. """
     employer_count = await Employer.count()
     worker_count = await Employee.count()
@@ -55,7 +130,7 @@ async def get_system_stats(admin: Employer = Depends(get_current_admin)):
     )
 
 @router.get("/dashboard/reports", response_model=ComprehensiveReport)
-async def get_detailed_reports(admin=Depends(get_current_admin)):
+async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
     """ Generates granular growth and referral metrics. """
     daily_stats, referral_stats, sub_stats = await asyncio.gather(
         ReportService.get_daily_worker_stats(),
@@ -69,10 +144,13 @@ async def get_detailed_reports(admin=Depends(get_current_admin)):
         subscriptions=sub_stats
     )
 
-# --- Approval Workflows ---
+
+# =====================================================================
+# APPROVAL WORKFLOWS
+# =====================================================================
 
 @router.patch("/verify-employer/{employer_id}")
-async def verify_employer_gst(employer_id: str, admin: Employer = Depends(get_current_admin)):
+async def verify_employer_gst(employer_id: str, admin: Admin = Depends(get_current_admin)):
     """ Manual override to verify a company's GST status with audit logging. """
     try:
         employer = await Employer.get(ObjectId(employer_id))
@@ -96,7 +174,7 @@ async def verify_employer_gst(employer_id: str, admin: Employer = Depends(get_cu
     return {"message": f"Employer {employer.company_name} verified successfully."}
 
 @router.put("/approve-worker/{worker_id}")
-async def approve_worker_profile(worker_id: str, admin: Employer = Depends(get_current_admin)):
+async def approve_worker_profile(worker_id: str, admin: Admin = Depends(get_current_admin)):
     """ Approves a worker, making them visible in searches. """
     worker = await Employee.get(ObjectId(worker_id))
     if not worker:
@@ -115,10 +193,13 @@ async def approve_worker_profile(worker_id: str, admin: Employer = Depends(get_c
     
     return {"message": f"Worker {worker.name} approved."}
 
-# --- System Configuration & Moderation ---
+
+# =====================================================================
+# SYSTEM CONFIGURATION & MODERATION
+# =====================================================================
 
 @router.delete("/suspend-user/{user_type}/{user_id}")
-async def suspend_user(user_type: str, user_id: str, admin: Employer = Depends(get_current_admin)):
+async def suspend_user(user_type: str, user_id: str, admin: Admin = Depends(get_current_admin)):
     """ Soft-deletes or suspends a user account with audit logging. """
     try:
         obj_id = ObjectId(user_id)
@@ -146,10 +227,13 @@ async def suspend_user(user_type: str, user_id: str, admin: Employer = Depends(g
     
     return {"message": f"{user_type.capitalize()} {user_id} has been suspended."}
 
-# --- Remaining Admin Endpoints ---
+
+# =====================================================================
+# SYSTEM LISTS
+# =====================================================================
 
 @router.get("/verification-queue", response_model=List[dict])
-async def get_verification_queue(admin: Employer = Depends(get_current_admin)):
+async def get_verification_queue(admin: Admin = Depends(get_current_admin)):
     pending = await Employer.find(
         Employer.employer_type == EmployerType.COMPANY,
         Employer.is_gst_verified == False
@@ -165,7 +249,7 @@ async def get_verification_queue(admin: Employer = Depends(get_current_admin)):
 @router.get("/audit-logs", response_model=List[dict])
 async def get_audit_trail(
     limit: int = 50,
-    admin: Employer = Depends(get_current_admin)
+    admin: Admin = Depends(get_current_admin)
 ):
     """
     Returns the most recent administrative actions.
