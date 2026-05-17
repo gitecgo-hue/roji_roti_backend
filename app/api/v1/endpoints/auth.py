@@ -400,7 +400,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         dest_type = "mobile number"
 
     # For local development convenience, you can print the OTP to your terminal
-    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
+    print(f"DEV ALERT: OTP for {identifier} is {otp_code}")
 
     return {"message": f"OTP has been successfully sent to your {dest_type}."}
 
