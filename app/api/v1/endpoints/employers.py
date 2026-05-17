@@ -1,47 +1,46 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from fastapi.responses import StreamingResponse
-from httpcore import request
 from pydantic import BaseModel, EmailStr, Field
 from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import List, Optional
-from requests import request
+from jose import jwt
 from beanie import PydanticObjectId
+
+# --- Core & Settings ---
+from app.core.config import settings
+from app.core.security import verify_password
+from app.core.security import create_access_token
+from app.api.dependencies import get_current_employer
 
 # --- Model & Service Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier 
-from app.models.employee import Employee, Application, ApplicationStatus
+from app.models.employee import Employee
 from app.models.subscriptions import Subscription
 from app.models.notification import Notification
 from app.models.contact import ContactUnlock
 from app.models.review import Review 
 from app.models.job import Job  
-from app.models.notification import Notification
-from app.core.security import create_access_token, get_password_hash
-from app.api.dependencies import get_current_employer
+from app.models.auth import OTP
+from app.models.application import JobApplication, ApplicationStatus
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.schemas.employer import EmployerDashboardResponse
-from app.models.application import JobApplication
 
 router = APIRouter()
 
-# --- Pydantic Schemas ---
+# =====================================================================
+# PYDANTIC SCHEMAS
+# =====================================================================
 
-class IndividualRegistration(BaseModel):
-    name: str
-    phone: str
-    password: str  
-    location: str
-
-class CompanyRegistration(BaseModel):
+class EmployerRegistrationRequest(BaseModel):
+    registration_token: str = Field(..., description="Token received from unified /login endpoint")
     company_name: str
-    contact_name: str
-    phone: str
-    email: EmailStr
-    password: str  
-    location: str
-    gst_number: str
+    name: str
+    email: Optional[EmailStr] = None
+    industry: Optional[str] = None
+    company_size: Optional[str] = None
+    # Add any extra fields you want (e.g., location, gst_number) based on your needs
 
 class RateWorkerRequest(BaseModel):
     rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1 and 5")
@@ -50,12 +49,143 @@ class RateWorkerRequest(BaseModel):
 class ApplicationStatusUpdate(BaseModel):
     new_status: ApplicationStatus
 
-# --- 1. CORE RECRUITMENT FLOW (ATS) ---
+class UpdatePhoneRequest(BaseModel):
+    new_phone: str = Field(..., description="The new 10-digit mobile number")
+    otp_code: str = Field(..., description="The 6-digit OTP sent to the NEW number")
 
-@router.get("/my-jobs", response_model=List[Job]) # <--- Change dict to Job
+
+# =====================================================================
+# REGISTRATION & DASHBOARD 
+# =====================================================================
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register_employer(data: EmployerRegistrationRequest):
+    """
+    Register a new Employer securely using a verified OTP token.
+    """
+    # 1. Securely decode the token to get the verified phone number
+    try:
+        payload = jwt.decode(
+            data.registration_token, 
+            settings.SECRET_KEY, 
+            algorithms=[settings.ALGORITHM]
+        )
+        if payload.get("user_type") != "registration_token":
+            raise ValueError("Invalid token type")
+            
+        verified_phone = payload.get("sub")
+    except Exception:
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid or expired registration session. Please verify your OTP again."
+        )
+
+    # 2. Double-check they don't already exist
+    existing_employer = await Employer.find_one(Employer.phone == verified_phone)
+    if existing_employer:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An employer account with this phone number already exists."
+        )
+
+    # 3. Create the Employer in MongoDB (Password removed for Passwordless Auth)
+    new_employer = Employer(
+        phone=verified_phone, # <--- Inserted securely from the token!
+        company_name=data.company_name,
+        name=data.name,
+        email=data.email,
+        industry=data.industry,
+        company_size=data.company_size,
+        is_active=True, # Employers are active right after mobile verification
+        employer_type=EmployerType.COMPANY, 
+        subscription_tier=SubscriptionTier.FREE 
+    )
+    
+    await new_employer.insert()
+
+    # Create a free tier subscription right away
+    base_sub = Subscription(
+        employer_id=str(new_employer.id),
+        plan_type="free",
+        is_active=True,
+        start_date=datetime.utcnow(),
+        expiry_date=datetime.utcnow() + timedelta(days=30),
+        contacts_checked=0,
+        resumes_downloaded=0,
+        jobs_posted=0,
+        india_level_jobs_posted=0
+    )
+    await base_sub.insert()
+
+    # 4. Automatically log them in by generating a real access token
+    access_token = create_access_token(
+        subject=str(new_employer.id), 
+        user_type="employer"
+    )
+    
+    return {
+        "status": "success",
+        "message": "Employer registered successfully!",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "employer_details": {
+            "id": str(new_employer.id),
+            "company_name": new_employer.company_name,
+            "name": new_employer.name,
+            "phone": new_employer.phone
+        }
+    }
+
+
+@router.get("/dashboard", response_model=EmployerDashboardResponse)
+async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
+    sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
+    
+    # 1. Get all jobs this employer posted (saves database calls)
+    my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
+    my_job_ids = [str(job.id) for job in my_jobs]
+    
+    # Count how many are active from the list we just fetched
+    active_jobs = sum(1 for job in my_jobs if job.is_active)
+    
+    # 2. BYPASS: Use a raw dictionary query instead of Application.job_id
+    if my_job_ids:
+        total_apps = await JobApplication.find(
+            {"job_id": {"$in": my_job_ids}}
+        ).count()
+        
+        # Also apply the bypass to the shortlisted count so it only counts THIS employer's apps
+        shortlisted = await JobApplication.find(
+            {"job_id": {"$in": my_job_ids}, "status": ApplicationStatus.SHORTLISTED}
+        ).count()
+    else:
+        # If they haven't posted any jobs, they naturally have 0 applications
+        total_apps = 0
+        shortlisted = 0
+
+    days_left = max(0, (sub.expiry_date - datetime.utcnow()).days) if sub.expiry_date else 0
+    
+    return EmployerDashboardResponse(
+        company_name=current_employer.company_name or current_employer.name,
+        subscription_tier=sub.plan_type.capitalize(),        
+        is_active=sub.is_active,
+        days_left=days_left,
+        expiry_date=sub.expiry_date,
+        active_jobs_count=active_jobs,
+        total_applicants_count=total_apps,
+        shortlisted_count=shortlisted,
+        job_posts_used=sub.jobs_posted, 
+        contacts_viewed=sub.contacts_checked
+    )
+
+
+# =====================================================================
+# CORE RECRUITMENT FLOW (ATS)
+# =====================================================================
+
+@router.get("/my-jobs", response_model=List[Job]) 
 async def list_employer_jobs(current_employer: Employer = Depends(get_current_employer)):
     """Aman sees every job he has ever posted."""
-    # This returns a list of Job objects
     jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     return jobs
 
@@ -95,7 +225,7 @@ async def list_job_applicants(
             "worker_id": str(app.employee_id),
             "worker_name": worker.name if worker else "Deleted Worker",
             "worker_category": worker.category if worker else "N/A",
-            "worker_phone": worker.phone if worker else "N/A", # Critical for contact
+            "worker_phone": worker.phone if worker else "N/A", 
             "status": getattr(app, "status", "applied"),
             "applied_at": getattr(app, "applied_at", datetime.utcnow())
         })
@@ -105,14 +235,13 @@ async def list_job_applicants(
 @router.patch("/applications/{application_id}/status")
 async def update_application_status(
     application_id: str,
-    request: ApplicationStatusUpdate, # <--- Now FastAPI knows to expect a JSON body!
+    request: ApplicationStatusUpdate, 
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
     Updates application status (Shortlist/Hire/Reject).
     If status is HIRED, it automatically closes the job and notifies the worker.
     """
-    
     # 1. Safely fetch the application record
     try:
         app_record = await JobApplication.get(PydanticObjectId(application_id))
@@ -131,15 +260,14 @@ async def update_application_status(
         )
 
     # 3. Update status and timestamp
-    app_record.status = request.new_status # <--- Updated to use request payload
+    app_record.status = request.new_status
     if hasattr(app_record, "updated_at"):
         app_record.updated_at = datetime.utcnow()
     await app_record.save()
 
     # 4. Automation: If 'HIRED', close the job and notify the worker
     job_closed = False
-    if request.new_status == ApplicationStatus.HIRED: # <--- Updated
-        # Close the job posting
+    if request.new_status == ApplicationStatus.HIRED:
         job.is_active = False
         if hasattr(job, "status"):
             job.status = "closed"
@@ -161,117 +289,10 @@ async def update_application_status(
         "job_closed": job_closed
     }
 
-# --- 2. REGISTRATION & DASHBOARD ---
 
-@router.post("/register/individual", status_code=status.HTTP_201_CREATED)
-async def register_individual(data: IndividualRegistration):
-    existing_employer = await Employer.find_one(Employer.phone == data.phone)
-    if existing_employer:
-        raise HTTPException(status_code=400, detail="Phone number already registered.")
-    
-    hashed_pw = get_password_hash(data.password)
-    employer = Employer(
-        employer_type=EmployerType.INDIVIDUAL,
-        name=data.name,
-        phone=data.phone,
-        location=data.location,
-        hashed_password=hashed_pw,
-        subscription_tier=SubscriptionTier.FREE 
-    )
-    await employer.insert()
-    
-    free_sub = Subscription(
-        employer_id=str(employer.id),
-        plan_type="free",
-        is_active=True,
-        start_date=datetime.utcnow(),
-        expiry_date=datetime.utcnow() + timedelta(days=30),
-        contacts_checked=0,
-        resumes_downloaded=0,
-        jobs_posted=0,
-        india_level_jobs_posted=0
-    )
-    await free_sub.insert()
-    access_token = create_access_token(subject=str(employer.id), user_type="employer")
-    return {"access_token": access_token, "employer_id": str(employer.id)}
-
-@router.post("/register/company", status_code=status.HTTP_201_CREATED)
-async def register_company(data: CompanyRegistration):
-    existing_employer = await Employer.find_one(Employer.phone == data.phone)
-    if existing_employer:
-        raise HTTPException(status_code=400, detail="Phone number already registered.")
-        
-    hashed_pw = get_password_hash(data.password)
-    employer = Employer(
-        employer_type=EmployerType.COMPANY,
-        company_name=data.company_name,
-        contact_name=data.contact_name,
-        phone=data.phone,
-        email=data.email,
-        location=data.location,
-        gst_number=data.gst_number,
-        hashed_password=hashed_pw,
-        is_gst_verified=False 
-    )
-    await employer.insert()
-    
-    base_sub = Subscription(
-        employer_id=str(employer.id),
-        plan_type="free",
-        is_active=True,
-        start_date=datetime.utcnow(),
-        expiry_date=datetime.utcnow() + timedelta(days=30),
-        contacts_checked=0,
-        resumes_downloaded=0,
-        jobs_posted=0,
-        india_level_jobs_posted=0
-    )
-    await base_sub.insert()
-    access_token = create_access_token(subject=str(employer.id), user_type="employer")
-    return {"message": "Company registered successfully.", "access_token": access_token}
-
-@router.get("/dashboard", response_model=EmployerDashboardResponse)
-async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
-    sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
-    
-    # 1. Get all jobs this employer posted (saves database calls)
-    my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
-    my_job_ids = [str(job.id) for job in my_jobs]
-    
-    # Count how many are active from the list we just fetched
-    active_jobs = sum(1 for job in my_jobs if job.is_active)
-    
-    # 2. BYPASS: Use a raw dictionary query instead of Application.job_id
-    if my_job_ids:
-        total_apps = await Application.find(
-            {"job_id": {"$in": my_job_ids}}
-        ).count()
-        
-        # Also apply the bypass to the shortlisted count so it only counts THIS employer's apps
-        shortlisted = await Application.find(
-            {"job_id": {"$in": my_job_ids}, "status": ApplicationStatus.SHORTLISTED}
-        ).count()
-    else:
-        # If they haven't posted any jobs, they naturally have 0 applications
-        total_apps = 0
-        shortlisted = 0
-
-    days_left = max(0, (sub.expiry_date - datetime.utcnow()).days) if sub.expiry_date else 0
-    
-    return EmployerDashboardResponse(
-        company_name=current_employer.company_name or current_employer.name,
-        subscription_tier=sub.plan_type.capitalize(),        
-        is_active=sub.is_active,
-        days_left=days_left,
-        expiry_date=sub.expiry_date,
-        active_jobs_count=active_jobs,
-        total_applicants_count=total_apps,
-        shortlisted_count=shortlisted,
-        job_posts_used=sub.jobs_posted, 
-        contacts_viewed=sub.contacts_checked
-    )
-
-# --- 3. DISCOVERY, SEARCH & ACTIONS ---
+# =====================================================================
+# DISCOVERY, SEARCH & ACTIONS
+# =====================================================================
 
 @router.get("/search-workers", response_model=List[dict])
 async def search_workers(
@@ -304,14 +325,14 @@ async def unlock_worker_contact(worker_id: str, current_employer: Employer = Dep
 
     return {"name": worker.name, "phone": worker.phone, "message": "Contact unlocked!"}
 
-# --- 4. NOTIFICATIONS & RESUMES ---
+
+# =====================================================================
+# NOTIFICATIONS & RESUMES
+# =====================================================================
 
 @router.get("/notifications")
 async def get_employer_notifications(current_employer: Employer = Depends(get_current_employer)):
     """Fetches the latest 20 notifications for the logged-in employer."""
-    
-    # 1. Match the field name (user_id)
-    # 2. NO str() wrap around current_employer.id!
     notifications = await Notification.find(
         Notification.user_id == current_employer.id 
     ).sort("-created_at").limit(20).to_list()
@@ -338,7 +359,6 @@ async def download_worker_resume(
     await SubscriptionService.increment_usage(str(current_employer.id), action_type="download_resume")
     
     # 5. Stream the file back to the client
-    # Added a safe filename replacement just in case the worker has spaces in their name
     safe_name = getattr(worker, 'name', 'Worker').replace(" ", "_")
     
     return StreamingResponse(
@@ -347,8 +367,10 @@ async def download_worker_resume(
         headers={"Content-Disposition": f"attachment; filename=Resume_{safe_name}.pdf"}
     )
 
-# --- 5. RATINGS & REVIEWS ---
-from app.models.contact import ContactUnlock
+
+# =====================================================================
+# RATINGS & REVIEWS
+# =====================================================================
 
 @router.post("/rate-worker/{worker_id}")
 async def rate_worker(
@@ -358,8 +380,6 @@ async def rate_worker(
 ):
     """Allows an employer to rate a worker ONLY if they have unlocked their contact."""
     
-    # 1. Security Check: Did Aman actually unlock Raju?
-    # We use ContactUnlock to verify they had a business transaction.
     has_unlocked = await ContactUnlock.find_one({
         "employer_id": current_employer.id,
         "worker_id": ObjectId(worker_id)
@@ -371,12 +391,10 @@ async def rate_worker(
             detail="You can only leave a review for workers whose contact you have unlocked."
         )
 
-    # 2. Fetch the Worker
     worker = await Employee.get(ObjectId(worker_id))
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
 
-    # 3. Update the Rating (Simple Moving Average for testing)
     current_rating = getattr(worker, 'rating', 0.0)
     
     if current_rating == 0.0:
@@ -387,7 +405,6 @@ async def rate_worker(
         
     await worker.save()
     
-    # Create a notification for the employer
     new_alert = Notification(
         user_id=current_employer.id,
         title="Review Submitted",
@@ -400,4 +417,64 @@ async def rate_worker(
         "message": "Review submitted successfully!",
         "worker": worker.name,
         "new_rating": worker.rating
+    }
+
+
+# =====================================================================
+# PROFILE & ACCOUNT MANAGEMENT (SECURE)
+# =====================================================================
+
+@router.patch("/me/phone", status_code=status.HTTP_200_OK)
+async def update_employer_phone(
+    data: UpdatePhoneRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Securely updates the employer's phone number after verifying an OTP sent to the NEW number.
+    """
+    clean_new_phone = data.new_phone[-10:]
+
+    # 1. Prevent them from "updating" to their current number
+    if current_employer.phone == clean_new_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="This is already your current phone number."
+        )
+
+    # 2. Check if the new phone is already taken by another account
+    # (We check both Employers and Employees to prevent cross-platform conflicts)
+    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
+                  await Employee.find_one({"phone": clean_new_phone})
+    
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number is already registered to another account."
+        )
+
+    # 3. VERIFY THE OTP FOR THE NEW NUMBER
+    otp_record = await OTP.find_one({"phone": clean_new_phone})
+    
+    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired OTP for the new phone number."
+        )
+
+    # 4. Consume the OTP safely (DO NOT DELETE THE TRACKER RECORD)
+    otp_record.hashed_code = None
+    await otp_record.save()
+
+    # 5. Update the Employer's database record
+    current_employer.phone = clean_new_phone
+    # Optional: Update the 'updated_at' timestamp if you track that
+    if hasattr(current_employer, "updated_at"):
+        current_employer.updated_at = datetime.utcnow()
+        
+    await current_employer.save()
+
+    return {
+        "status": "success", 
+        "message": "Phone number successfully updated.", 
+        "new_phone": current_employer.phone
     }

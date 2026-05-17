@@ -13,7 +13,7 @@ from app.models.rating import Rating
 from app.models.category import Category       
 from app.models.subscriptions import Subscription
 from app.models.contact import ContactUnlock
-from app.models.auth import OTP                
+from app.models.auth import OTP, TokenBlacklist
 from app.models.payment import Payment
 from app.models.partner import Partner
 from app.models.promo import PromoCode
@@ -50,6 +50,7 @@ async def connect_to_mongo():
             Category,         
             Subscription,     
             OTP,
+            TokenBlacklist,
             Payment,
             PromoCode,        
             Partner,

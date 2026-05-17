@@ -6,10 +6,15 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Response
 from fastapi.responses import StreamingResponse
 from bson import ObjectId
+from jose import jwt
+
+# --- Core & Dependencies ---
+from app.core.config import settings
+from app.core.security import create_access_token, verify_password
+from app.api.dependencies import get_current_employee, get_current_employer
 
 # --- Schemas ---
 from app.schemas.employee import (
-    EmployeeCreate, 
     EmployeeResponse, 
     AvailabilityUpdate,
     EmployeeKYCUpdate,
@@ -24,10 +29,7 @@ from app.models.job import Job
 from app.models.payment import Payment 
 from app.models.review import Review 
 from app.models.notification import Notification
-
-# --- Core & Dependencies ---
-from app.core.security import create_access_token, get_password_hash
-from app.api.dependencies import get_current_employee, get_current_employer
+from app.models.auth import OTP 
 
 # --- Services ---
 from app.services.webhooks import WebhookService 
@@ -38,46 +40,88 @@ from app.services.subscriptions import SubscriptionService
 router = APIRouter()
 
 # =====================================================================
+# PYDANTIC SCHEMAS FOR REGISTRATION & PROFILE UPDATES
+# =====================================================================
+
+class LocationInput(BaseModel):
+    latitude: float
+    longitude: float
+
+class EmployeeRegistrationRequest(BaseModel):
+    registration_token: str = Field(..., description="Token received from /verify-signup-otp")
+    name: str
+    category: str
+    location: LocationInput
+    location_name: str
+    preferred_locations: List[str] = []
+    experience: int = 0
+    languages: List[str] = []
+    expected_salary: Optional[str] = None
+    gender: Optional[str] = None
+    email: Optional[EmailStr] = None
+    referred_by_id: Optional[str] = None
+
+class UpdatePhoneRequest(BaseModel):
+    new_phone: str = Field(..., description="The new 10-digit mobile number")
+    otp_code: str = Field(..., description="The 6-digit OTP sent to the NEW number")
+
+
+# =====================================================================
 # EMPLOYEE ACTIONS
 # =====================================================================
 
 # --- Registration & Auth ---
 
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
-async def register_employee(employee_in: EmployeeCreate):
+async def register_employee(data: EmployeeRegistrationRequest):
     """
-    Register a new blue-collar worker profile.
+    Register a new blue-collar worker profile securely using a verified OTP token.
     """
-    existing_employee = await Employee.find_one(Employee.phone == employee_in.phone)
+    try:
+        payload = jwt.decode(
+            data.registration_token, 
+            settings.SECRET_KEY, 
+            algorithms=[settings.ALGORITHM]
+        )
+        if payload.get("user_type") != "registration_token":
+            raise ValueError("Invalid token type")
+            
+        verified_phone = payload.get("sub")
+    except Exception:
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid or expired registration session. Please verify your OTP again."
+        )
+
+    existing_employee = await Employee.find_one(Employee.phone == verified_phone)
     if existing_employee:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An employee with this phone number is already registered."
+            detail="An account with this phone number already exists."
         )
     
     geo_location = GeoLocation(
         type="Point",
-        coordinates=[employee_in.location.longitude, employee_in.location.latitude]
+        coordinates=[data.location.longitude, data.location.latitude]
     )
     
     new_employee = Employee(
-        full_name=employee_in.name,              
-        trade_category=employee_in.category,     
-        location=f"{employee_in.location.latitude}, {employee_in.location.longitude}",        
-        experience_years=0, # Fixed formatting bug here
-        phone=employee_in.phone,
-        name=employee_in.name,
-        category=employee_in.category,
-        location_name=employee_in.location_name,
+        phone=verified_phone,
+        full_name=data.name,              
+        trade_category=data.category,     
+        location=f"{data.location.latitude}, {data.location.longitude}",        
+        experience_years=data.experience, 
+        name=data.name,
+        category=data.category,
+        location_name=data.location_name,
         current_location=geo_location,
-        preferred_locations=employee_in.preferred_locations,
-        experience=employee_in.experience,
-        languages=employee_in.languages,
-        expected_salary=employee_in.expected_salary,
-        gender=employee_in.gender,
-        email=employee_in.email,
-        referred_by_id=employee_in.referred_by_id,
-        hashed_password=get_password_hash(employee_in.password)  
+        preferred_locations=data.preferred_locations,
+        experience=data.experience,
+        languages=data.languages,
+        expected_salary=data.expected_salary,
+        gender=data.gender,
+        email=data.email,
+        referred_by_id=data.referred_by_id
     )
     
     await new_employee.insert()
@@ -95,6 +139,7 @@ async def register_employee(employee_in: EmployeeCreate):
     )
     
     return {
+        "status": "success",
         "message": "Registration successful",
         "access_token": access_token,
         "token_type": "bearer",
@@ -252,7 +297,7 @@ async def apply_for_job(
     new_app = JobApplication(
         job_id=job.id,
         employee_id=current_worker.id,
-        employer_id=job.employer_id, # Added to match the model schema!
+        employer_id=job.employer_id, 
         status=ApplicationStatus.APPLIED
     )
 
@@ -276,6 +321,53 @@ async def read_employee_me(current_employee: Employee = Depends(get_current_empl
     Get current logged-in employee profile.
     """
     return current_employee
+
+@router.patch("/me/phone", status_code=status.HTTP_200_OK)
+async def update_employee_phone(
+    data: UpdatePhoneRequest,
+    current_worker: Employee = Depends(get_current_employee)
+):
+    """
+    Securely updates the employee's phone number after verifying an OTP sent to the NEW number.
+    """
+    clean_new_phone = data.new_phone[-10:]
+
+    if current_worker.phone == clean_new_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="This is already your current phone number."
+        )
+
+    # Cross-platform checking to prevent duplication conflicts
+    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
+                  await Employee.find_one({"phone": clean_new_phone})
+    
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number is already registered to another account."
+        )
+
+    # Verify OTP against tracker
+    otp_record = await OTP.find_one({"phone": clean_new_phone})
+    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired OTP for the new phone number."
+        )
+
+    # Consume token but retain rate tracking records
+    otp_record.hashed_code = None
+    await otp_record.save()
+
+    current_worker.phone = clean_new_phone
+    await current_worker.save()
+
+    return {
+        "status": "success", 
+        "message": "Phone number successfully updated.", 
+        "new_phone": current_worker.phone
+    }
 
 @router.patch("/me/kyc", status_code=status.HTTP_200_OK)
 async def update_worker_kyc(
@@ -422,7 +514,7 @@ async def download_employee_resume(
         headers={"Content-Disposition": f"attachment; filename={employee.name}_Resume.pdf"}
     )
 
-# --- Catgory of jobs ---
+# --- Category of jobs ---
 
 @router.get("/categories", response_model=List[str])
 async def get_all_categories():

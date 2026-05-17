@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.core.config import settings
 from app.models.employer import Employer
 from app.models.employee import Employee
+from app.models.auth import TokenBlacklist  # <--- Added Import
 from app.core.security import ALGORITHM
 
 # --- OAuth2 Configuration ---
@@ -24,10 +25,22 @@ async def get_lang(accept_language: str = Header("en")):
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     """
-    Decodes the JWT and fetches the base user data from the token.
+    Decodes the JWT, checks the blacklist, and fetches the base user data from the token.
     """
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        
+        # --- THE GUARD: Check if the token was logged out ---
+        jti = payload.get("jti")
+        if jti:
+            is_blacklisted = await TokenBlacklist.find_one({"jti": jti})
+            if is_blacklisted:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, 
+                    detail="Session expired or logged out. Please log in again."
+                )
+        # ----------------------------------------------------
+        
         user_id: str = payload.get("sub")
         user_type: str = payload.get("user_type")
         
