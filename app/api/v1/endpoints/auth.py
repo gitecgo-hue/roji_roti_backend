@@ -313,7 +313,23 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
                 detail="Too many requests. Please wait 60 seconds."
             )
     
+    # 1. Generate a standard random OTP
     otp_code = ''.join(random.choices(string.digits, k=6))
+    clean_phone = identifier[-10:] if not is_email(identifier) else None
+
+    # =================================================================
+    # 🛑 DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
+    # =================================================================
+    TEST_ACCOUNTS = {
+        "9999999999": "123456", # Your Root Admin
+        "8888888888": "111111"  # Apple/Google Play Tester
+    }
+    
+    is_test_account = False
+    if clean_phone and clean_phone in TEST_ACCOUNTS:
+        otp_code = TEST_ACCOUNTS[clean_phone]
+        is_test_account = True
+    # =================================================================
 
     if is_email(identifier):
         # --- SECONDARY: Email Flow ---
@@ -330,7 +346,6 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         
     else:
         # --- PRIMARY: Mobile Flow ---
-        clean_phone = identifier[-10:]
         hashed_otp = get_password_hash(otp_code)
         
         # Determine exact user type
@@ -378,9 +393,14 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
             )
             await new_otp.insert()
         
-        # Trigger SMS API
-        await SMSService.send_otp(identifier, otp_code)
+        # 🛑 ONLY trigger the real SMS API if it is NOT a dummy account
+        if not is_test_account:
+            await SMSService.send_otp(identifier, otp_code)
+            
         dest_type = "mobile number"
+
+    # For local development convenience, you can print the OTP to your terminal
+    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
 
     return {"message": f"OTP has been successfully sent to your {dest_type}."}
 
