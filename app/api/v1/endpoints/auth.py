@@ -321,8 +321,8 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
     # DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
     # =================================================================
     TEST_ACCOUNTS = {
-        "9999999999": "123456", # Your Root Admin
-        "8888888888": "111111"  # Apple/Google Play Tester
+        "9999999999": "123456", # Root Admin
+        "8888888888": "111111"
     }
     
     is_test_account = False
