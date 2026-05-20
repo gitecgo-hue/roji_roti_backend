@@ -42,7 +42,7 @@ class OTPRequest(BaseModel):
 
 class UpdateAdminPhoneRequest(BaseModel):
     new_phone: str = Field(..., description="The new admin mobile number")
-    otp_code: str = Field(..., description="6-digit verification code sent to the new mobile number")
+    otp_code: str = Field(..., description="4-digit verification code sent to the new mobile number")
 
 
 # ==============================================================================
@@ -313,16 +313,16 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
                 detail="Too many requests. Please wait 60 seconds."
             )
     
-    # 1. Generate a standard random OTP
-    otp_code = ''.join(random.choices(string.digits, k=6))
+    # 1. Generate a standard random 4-digit OTP
+    otp_code = ''.join(random.choices(string.digits, k=4))
     clean_phone = identifier[-10:] if not is_email(identifier) else None
 
     # =================================================================
     # DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
     # =================================================================
     TEST_ACCOUNTS = {
-        "9999999999": "123456", # Root Admin
-        "8888888888": "111111"
+        "9999999999": "1234", # Root Admin
+        "8888888888": "1111"
     }
     
     is_test_account = False
