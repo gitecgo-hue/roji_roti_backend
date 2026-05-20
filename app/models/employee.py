@@ -30,6 +30,7 @@ class Employee(Document):
     total_reviews: int = 0
     profile_picture_url: Optional[str] = None
     hashed_password: Optional[str] = None
+    last_otp_requested_at: Optional[datetime] = None
     
     # --- Location Data (Integrated) ---
     location_name: str  
