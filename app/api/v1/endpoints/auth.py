@@ -99,16 +99,21 @@ async def admin_login(data: UnifiedLoginRequest, request: Request):
     # 2. AUTHENTICATION: OTP ONLY
     if identity_type == "phone":
         clean_phone = data.identifier[-10:]
-        # BYPASS: Raw query for OTP
-        otp_record = await OTP.find_one({"phone": clean_phone, "user_type": "admin"})
         
-        # Safely verify the OTP and ensure hashed_code is present
-        if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
-            raise HTTPException(status_code=401, detail="Invalid or expired SMS OTP.")
+        # 🛑 DUMMY ADMIN BYPASS
+        if clean_phone == "9999999999" and data.otp_code == "1234":
+            pass # Skip database verification entirely!
             
-        # Consume the OTP safely (DO NOT DELETE THE TRACKER RECORD)
-        otp_record.hashed_code = None
-        await otp_record.save()
+        else:
+            # Standard Database Verification
+            otp_record = await OTP.find_one({"phone": clean_phone, "user_type": "admin"})
+            
+            if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+                raise HTTPException(status_code=401, detail="Invalid or expired SMS OTP.")
+                
+            # Consume the OTP safely (DO NOT DELETE THE TRACKER RECORD)
+            otp_record.hashed_code = None
+            await otp_record.save()
         
     else:
         if not admin_user.otp_code or admin_user.otp_code != data.otp_code:
@@ -209,18 +214,29 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     # =====================================================================
     if identity_type == "phone":
         clean_phone = data.identifier[-10:]
-        # BYPASS: Raw query for OTP
-        otp_record = await OTP.find_one({"phone": clean_phone})
         
-        # Safely verify the OTP and ensure hashed_code is present
-        if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
-            raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
+        # 🛑 DUMMY ACCOUNT BYPASS
+        TEST_ACCOUNTS = {
+            "9999999999": "1234", # Root Admin
+            "8989792276": "5678", # Employer
+            "8989792275": "9012", # Employee
+        }
         
-        # OTP is correct, consume it by setting to None (DO NOT DELETE THE TRACKER)
-        otp_record.hashed_code = None
-        await otp_record.save()
-        
-        verified_identity = clean_phone
+        if clean_phone in TEST_ACCOUNTS and data.otp_code == TEST_ACCOUNTS[clean_phone]:
+            # Skip the database check entirely!
+            verified_identity = clean_phone
+            
+        else:
+            # Standard Database Verification
+            otp_record = await OTP.find_one({"phone": clean_phone})
+            
+            if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+                raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
+            
+            # OTP is correct, consume it by setting to None (DO NOT DELETE THE TRACKER)
+            otp_record.hashed_code = None
+            await otp_record.save()
+            verified_identity = clean_phone
         
     else:
         # Email Verification
