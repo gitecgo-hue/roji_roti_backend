@@ -294,6 +294,7 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
 # --- UNIVERSAL OTP REQUEST SYSTEM ---
 # ==============================================================================
 
+@router.post("/resend-otp")
 @router.post("/request-otp")
 @limiter.limit("3/minute")
 async def request_otp_challenge(data: OTPRequest, request: Request):
