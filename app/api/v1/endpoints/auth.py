@@ -323,7 +323,8 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
     # =================================================================
     TEST_ACCOUNTS = {
         "9999999999": "1234", # Root Admin
-        "8888888888": "1111"
+        "8989792276": "5678", # Employer
+        "8989792275": "9012", # Employee
     }
     
     is_test_account = False
@@ -400,10 +401,21 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
             
         dest_type = "mobile number"
 
-    # For local development convenience, you can print the OTP to your terminal
-    print(f"DEV ALERT: OTP for {identifier} is {otp_code}")
+    # =================================================================
+    # NEW CODE GOES HERE (Replacing the old return statement)
+    # =================================================================
+    
+    # For local development convenience, print the OTP to your terminal
+    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
 
-    return {"message": f"OTP has been successfully sent to your {dest_type}."}
+    # Create a dynamic response payload
+    response_payload = {"message": f"OTP has been successfully sent to your {dest_type}."}
+    
+    # If you have a settings.DEBUG flag, use that. 
+    # Otherwise, this safely prints the OTP directly into Postman/Mobile App during development
+    response_payload["dev_otp_bypass"] = otp_code 
+
+    return response_payload
 
 
 # ==============================================================================
