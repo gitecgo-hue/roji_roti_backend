@@ -19,6 +19,7 @@ from app.models.partner import Partner
 from app.models.promo import PromoCode
 from app.models.notification import Notification
 from app.models.transaction import Transaction
+from app.models.application import JobApplication 
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ async def connect_to_mongo():
             Employer,         
             Job,
             Application,
+            JobApplication,
             Notification,         
             Rating,
             Category,         

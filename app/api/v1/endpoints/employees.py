@@ -197,21 +197,38 @@ async def get_job_recommendations(
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Finds the 10 most recent jobs that match the worker's category and city.
+    Finds the 10 most recent jobs that match the worker's category and city (case-insensitive).
     """
+    # 1. Safely extract the worker's category
+    worker_category = getattr(current_employee, "category", None) or getattr(current_employee, "trade_category", None)
+    
+    if not worker_category:
+        return []
+
+    # 2. Build a CASE-INSENSITIVE query for category
     query = {
-        "category": current_employee.category,
-        "location": {"$regex": current_employee.location_name, "$options": "i"},
+        "category": re.compile(f"^{worker_category}$", re.IGNORECASE),
         "is_active": True
     }
+    
+    # 3. Bulletproof Location Match (Checks all possible field names)
+    location_name = getattr(current_employee, "location_name", None)
+    if location_name:
+        query["$or"] = [
+            {"location": {"$regex": location_name, "$options": "i"}},
+            {"locations": {"$regex": location_name, "$options": "i"}},
+            {"location_name": {"$regex": location_name, "$options": "i"}}
+        ]
 
+    # 4. Execute the search with sort and limit
     jobs = await Job.find(query).sort("-created_at").limit(10).to_list()
 
+    # 5. Format the output safely
     return [{
         "job_id": str(j.id),
-        "title": j.title,
-        "salary": j.salary_range,
-        "posted_at": j.created_at
+        "title": getattr(j, "title", "Job Posting"),
+        "salary": getattr(j, "salary_range", getattr(j, "salary", "Not specified")), 
+        "posted_at": getattr(j, "created_at", None)
     } for j in jobs]
 
 @router.get("/nearby-jobs")

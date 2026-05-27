@@ -24,12 +24,16 @@ class NotificationService:
         }
 
         # 2. Add Location Radius (if the job has GPS coordinates)
-        if job.coordinates:
+        if job.current_location:
+            # Read from the updated current_location field instead!
+            lon = job.current_location.coordinates[0]
+            lat = job.current_location.coordinates[1]
+            
             query["current_location"] = {
                 "$nearSphere": {
                     "$geometry": {
                         "type": "Point",
-                        "coordinates": job.coordinates.coordinates # [lon, lat]
+                        "coordinates": [lon, lat] 
                     },
                     "$maxDistance": 10000 # 10 KM radius
                 }
