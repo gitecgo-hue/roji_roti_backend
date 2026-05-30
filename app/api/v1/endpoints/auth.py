@@ -341,6 +341,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         "9999999999": "1234", # Root Admin
         "8989792276": "5678", # Employer
         "8989792275": "9012", # Employee
+        "9301717807": "3456"  # Test Account
     }
     
     is_test_account = False
