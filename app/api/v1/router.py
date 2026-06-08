@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import employees, employers, auth, jobs, ratings, admin, payments
+from app.api.v1.endpoints import employees, employers, auth, ivr, jobs, ratings, admin, payments
 
 api_router = APIRouter()
 
@@ -21,6 +21,8 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
 # Attach the ratings endpoints
 api_router.include_router(ratings.router, prefix="/ratings", tags=["Ratings"])
 
-
 # Attach the payments endpoints
-api_router.include_router(payments.router, prefix="/payments", tags=["payments"])
+api_router.include_router(payments.router, prefix="/payments", tags=["Payments"])
+
+# Attach the IVR endpoints
+api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])

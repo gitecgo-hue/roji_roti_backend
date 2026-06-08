@@ -14,8 +14,9 @@ from app.core.limiter import limiter
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.scheduler import start_scheduler, stop_scheduler
-from app.core.exceptions import initialize_exception_handlers  # <--- Import your handlers
+from app.core.exceptions import initialize_exception_handlers 
 from app.api.v1.router import api_router
+from app.api.v1.endpoints import ivr
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -81,6 +82,7 @@ app.add_middleware(
 
 # --- Routing ---
 app.include_router(api_router, prefix="/api/v1")
+api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])
 
 
 @app.get("/")
