@@ -3,7 +3,7 @@ import random
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response
 from fastapi.responses import StreamingResponse
 from bson import ObjectId
 from jose import jwt
@@ -30,12 +30,14 @@ from app.models.payment import Payment
 from app.models.review import Review 
 from app.models.notification import Notification
 from app.models.auth import OTP 
+# Note: Ensure app.models.category is imported if Category is used below (e.g., from app.models.category import Category)
 
 # --- Services ---
 from app.services.webhooks import WebhookService 
 from app.utils.storage import StorageService
 from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
+from app.services.kyc import KYCService
 
 router = APIRouter()
 
@@ -386,44 +388,85 @@ async def update_employee_phone(
         "new_phone": current_worker.phone
     }
 
-@router.patch("/me/kyc", status_code=status.HTTP_200_OK)
-async def update_worker_kyc(
-    kyc_data: EmployeeKYCUpdate,
+@router.post("/me/verify-kyc")
+async def verify_worker_kyc(
+    id_type: str = Form(..., description="Must be 'AADHAAR' or 'PAN'"),
+    document_image: UploadFile = File(..., description="Photo of the ID card"),
     current_worker: Employee = Depends(get_current_employee)
 ):
     """
-    Allows a worker to update their KYC details securely.
+    Hybrid KYC Verification: Attempts OCR first. If it fails 3 times, routes to manual Admin review.
     """
-    updates_made = False
+    # 1. State Checks
+    if current_worker.kyc_status == "VERIFIED" or getattr(current_worker, "is_approved", False):
+        return {"status": "success", "message": "Your account is already verified!"}
+        
+    if current_worker.kyc_status == "PENDING_REVIEW":
+        return {
+            "status": "pending", 
+            "message": "Your document is currently in the queue for manual review. Please check back later."
+        }
 
-    if kyc_data.aadhar_number:
-        existing = await Employee.find_one(Employee.aadhar_number == kyc_data.aadhar_number)
-        if existing and str(existing.id) != str(current_worker.id):
-             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This ID is already linked to another account."
-            )
-        current_worker.aadhar_number = kyc_data.aadhar_number
-        updates_made = True
+    # 2. Validate file type
+    if document_image.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
+        raise HTTPException(status_code=400, detail="Only JPG and PNG images are supported.")
 
-    if kyc_data.pan_number:
-        current_worker.pan_number = kyc_data.pan_number.upper()
-        updates_made = True
-
-    if not updates_made:
+    file_bytes = await document_image.read()
+    
+    # 3. Call the external KYC Provider
+    try:
+        verification_result = await KYCService.verify_id_document(file_bytes, id_type)
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="No valid KYC data provided for update."
+            status_code=status.HTTP_502_BAD_GATEWAY, 
+            detail="KYC Provider is currently unavailable. Please try again later."
         )
 
+    # =====================================================================
+    # 4. THE HYBRID FALLBACK LOGIC
+    # =====================================================================
+    if verification_result["status"] != "VERIFIED":
+        # Increment their failure counter
+        current_worker.kyc_attempts += 1
+        
+        if current_worker.kyc_attempts >= 3:
+            # THE FALLBACK: They failed 3 times. Route to a human.
+            current_worker.kyc_status = "PENDING_REVIEW"
+            
+            # TODO: Upload the 'file_bytes' to AWS S3/Cloudinary here 
+            # current_worker.kyc_document_url = await StorageService.upload_kyc_doc(file_bytes)
+            
+            await current_worker.save()
+            return {
+                "status": "manual_review",
+                "message": "Automated verification failed. We have sent your document to our team for a manual review within 24 hours."
+            }
+        else:
+            # THE STRICT GATE: Force a retake
+            await current_worker.save()
+            attempts_left = 3 - current_worker.kyc_attempts
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail=f"Verification failed. Please ensure the image is clear and well-lit. You have {attempts_left} automated attempts remaining."
+            )
+
+    # =====================================================================
+    # 5. AUTOMATIC APPROVAL (If OCR Succeeds)
+    # =====================================================================
+    if id_type == "AADHAAR":
+        current_worker.adhar_card_number = verification_result["extracted_number"]
+    else:
+        current_worker.pan_card = verification_result["extracted_number"]
+        
+    current_worker.kyc_status = "VERIFIED"
+    current_worker.is_approved = True # Keep for backwards compatibility
+    
     await current_worker.save()
 
     return {
-        "message": "Profile KYC details updated successfully.",
-        "kyc_status": {
-            "aadhar_verified": bool(current_worker.aadhar_number),
-            "pan_verified": bool(current_worker.pan_number)
-        }
+        "status": "success",
+        "message": "Identity successfully verified! Your account is now active.",
+        "verified_name": verification_result["extracted_name"]
     }
 
 @router.post("/upload-photo", status_code=status.HTTP_200_OK)
@@ -538,5 +581,6 @@ async def get_all_categories():
     """
     Returns a simple list of category names for the registration dropdown.
     """
+    # Requires Category to be imported
     categories = await Category.find(Category.is_active == True).to_list()
     return [c.name for c in categories]

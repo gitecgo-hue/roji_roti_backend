@@ -1,4 +1,3 @@
-# --- IN app/main.py ---
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -59,7 +58,7 @@ app = FastAPI(
 )
 
 # Initialize global exception wrappers
-initialize_exception_handlers(app)  # <--- CRITICAL: Registers the error interceptors
+initialize_exception_handlers(app) 
 
 # --- Rate Limiter Configuration ---
 app.state.limiter = limiter

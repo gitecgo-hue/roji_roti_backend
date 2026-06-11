@@ -49,6 +49,11 @@ class Employee(Document):
     adhar_card_number: Optional[str] = None
     pan_card: Optional[str] = None
     
+    # --- KYC Hybrid Verification ---
+    kyc_status: str = Field(default="UNVERIFIED") # Can be: UNVERIFIED, PENDING_REVIEW, VERIFIED
+    kyc_attempts: int = Field(default=0)
+    kyc_document_url: Optional[str] = None # Where we store the blurry image for the admin to look at
+    
     # --- Platform Status ---
     is_approved: bool = Field(default=False) 
     is_active: bool = Field(default=True)

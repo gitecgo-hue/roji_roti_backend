@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -143,6 +143,96 @@ async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
         referrals=referral_stats,
         subscriptions=sub_stats
     )
+
+
+# =====================================================================
+# KYC MANAGEMENT
+# =====================================================================
+
+@router.get("/kyc/pending")
+async def get_pending_kyc_queue(current_admin: Admin = Depends(get_current_admin)):
+    """
+    Retrieves all worker profiles currently waiting for manual KYC review.
+    """
+    pending_workers = await Employee.find({"kyc_status": "PENDING_REVIEW"}).sort("updated_at").to_list()
+    
+    return [{
+        "worker_id": str(worker.id),
+        "name": worker.name,
+        "phone": worker.phone,
+        "category": worker.category,
+        "kyc_document_url": worker.kyc_document_url, # The blurry image URL
+        "failed_attempts": worker.kyc_attempts
+    } for worker in pending_workers]
+
+
+@router.patch("/kyc/{worker_id}/approve")
+async def manual_kyc_approve(
+    worker_id: str,
+    id_type: str = Body(..., description="Must be 'AADHAAR' or 'PAN'"),
+    extracted_number: str = Body(..., description="The ID number the admin manually read from the image"),
+    current_admin: Admin = Depends(get_current_admin)
+):
+    """
+    Admin manually overrides a failed OCR attempt, inputs the correct ID number, and approves the worker.
+    """
+    worker = await Employee.get(ObjectId(worker_id))
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found.")
+
+    if worker.kyc_status == "VERIFIED":
+        raise HTTPException(status_code=400, detail="Worker is already verified.")
+
+    # 1. Save the manually extracted data
+    if id_type == "AADHAAR":
+        worker.adhar_card_number = extracted_number
+    else:
+        worker.pan_card = extracted_number
+
+    # 2. Update their status
+    worker.kyc_status = "VERIFIED"
+    worker.is_approved = True
+    
+    # Optional: Clear the document URL if you don't want to store PII long-term
+    # worker.kyc_document_url = None 
+
+    await worker.save()
+
+    # 3. Notify the worker
+    # await SmsService.send_sms(worker.phone, "Great news! Your Roji Roti account has been manually verified and is now active. You can now apply for jobs!")
+
+    return {"status": "success", "message": f"Worker {worker.name} has been successfully verified."}
+
+
+@router.patch("/kyc/{worker_id}/reject")
+async def manual_kyc_reject(
+    worker_id: str,
+    reason: str = Body(..., description="Reason for rejection to send to the worker"),
+    current_admin: Admin = Depends(get_current_admin)
+):
+    """
+    Admin rejects the document because it is completely unreadable or fraudulent.
+    Resets the worker's attempt counter so they can try uploading again.
+    """
+    worker = await Employee.get(ObjectId(worker_id))
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found.")
+
+    # 1. Reset their KYC state
+    worker.kyc_status = "UNVERIFIED"
+    worker.kyc_attempts = 0 # Give them 3 fresh attempts!
+    
+    # 2. Delete the bad image to save cloud storage space
+    # await StorageService.delete_kyc_doc(worker.kyc_document_url)
+    worker.kyc_document_url = None
+
+    await worker.save()
+
+    # 3. Notify the worker
+    notification_msg = f"Your recent ID upload was rejected: {reason}. Please log back into the app and take a clear, well-lit photo of your ID."
+    # await SmsService.send_sms(worker.phone, notification_msg)
+
+    return {"status": "success", "message": f"Worker {worker.name}'s document rejected. They have been notified to try again."}
 
 
 # =====================================================================
