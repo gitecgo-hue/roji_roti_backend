@@ -2,6 +2,7 @@ import re
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from beanie import PydanticObjectId
 
 # --- Core Utility Schemas ---
 
@@ -29,7 +30,7 @@ class EmployeeKYCUpdate(BaseModel):
         min_length=12, 
         max_length=12,
         pattern=r"^\d{12}$", 
-        description="12-digit Aadhaar Number [Redacted]"
+        description="12-digit Aadhaar Number"
     )
     pan_number: Optional[str] = Field(
         default=None, 
@@ -72,14 +73,20 @@ class EmployeeResponse(BaseModel):
     """
     Standard data returned to the platform for worker profiles.
     """
-    id: str = Field(..., alias="employee_id") 
+    # Let Beanie handle the ObjectId-to-String conversion
+    id: PydanticObjectId
+    
     phone: str
-    name: str
-    category: str
-    location_name: str
-    availability_status: bool 
+    
+    # Optional fields to allow skeleton profiles to be read without crashing
+    name: Optional[str] = None
+    category: Optional[str] = None
+    location_name: Optional[str] = None
+    
+    # Made optional with defaults just in case the skeleton profile lacks them
+    availability_status: Optional[bool] = False 
     rating: float = Field(default=0.0, description="1-5 star aggregate rating")
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     model_config = ConfigDict(
         from_attributes=True,
