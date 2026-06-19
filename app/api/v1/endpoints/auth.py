@@ -145,11 +145,9 @@ async def admin_login(data: UnifiedLoginRequest, request: Request):
     return {
         "status": "success",
         "access_token": access_token, 
-        "token_type": "bearer",
         "user_type": "admin",
-        "role": admin_user.role,
-        "user_name": admin_user.name
-    }
+        "role": admin_user.role,    
+        }
 
 
 @router.patch("/admin/me/phone", status_code=status.HTTP_200_OK)
@@ -279,9 +277,9 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
             raise HTTPException(status_code=404, detail="Email not registered.")
             
         # Do NOT create a user here! Just give them a temporary pass to the signup page.
-        registration_token = create_access_token(
+        access_token = create_access_token(
             subject=verified_identity, 
-            user_type="registration_token",
+            user_type="access_token",
             expires_delta=timedelta(minutes=15)
         )
         
@@ -405,7 +403,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
             
         dest_type = "mobile number"
 
-    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
+    print(f"DEV ALERT: OTP for {identifier} is {otp_code}")
 
     return {
         "message": f"OTP has been successfully sent to your {dest_type}.",
