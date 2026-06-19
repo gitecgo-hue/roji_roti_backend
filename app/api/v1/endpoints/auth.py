@@ -288,7 +288,7 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         return {
             "status": "unregistered",
             "action": "redirect_to_register",
-            "message": "No account exists with this number. Please sign up.",
+            "message": "No account exists. Please sign up.",
             "registration_token": registration_token,
             "verified_phone": verified_identity
         }
@@ -321,46 +321,45 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
 @limiter.limit("3/minute")
 async def request_otp_challenge(data: OTPRequest, request: Request):
     """
-    Universal OTP Request. Prioritizes Mobile numbers.
-    Allows sending OTP to unregistered mobile numbers, and handles Admin OTPs securely.
+    Universal OTP Request. 
+    STRICT GATE: Only generates OTPs for users that already exist in the database.
     """
     identifier = data.identifier
     now = datetime.utcnow()
-    user = await get_user_by_identifier(identifier)
     
-    # Cooldown Check
-    if user and getattr(user, "last_otp_requested_at", None):
+    # 1. THE STRICT GATEKEEPER
+    user = await get_user_by_identifier(identifier)
+    clean_phone = identifier[-10:] if not is_email(identifier) else None
+
+    # Hardcoded test accounts for Apple/Google app reviewers
+    TEST_ACCOUNTS = ["9999999999", "8989792276", "8989792275", "9301717807"]
+
+    if not user and clean_phone not in TEST_ACCOUNTS:
+        # User does not exist! Stop everything and throw an error.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="This account does not exist. Please go to the Sign Up page to register."
+        )
+
+    # 2. Cooldown Check (Only runs if user exists)
+    if getattr(user, "last_otp_requested_at", None):
         if now - user.last_otp_requested_at < timedelta(seconds=60):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS, 
                 detail="Too many requests. Please wait 60 seconds."
             )
     
-    # 1. Generate a standard random 4-digit OTP
+    # 3. Generate OTP
     otp_code = ''.join(random.choices(string.digits, k=4))
-    clean_phone = identifier[-10:] if not is_email(identifier) else None
-
-    # =================================================================
-    # DUMMY OTP OVERRIDE FOR TESTING & APP STORE REVIEWERS
-    # =================================================================
-    TEST_ACCOUNTS = {
-        "9999999999": "1234", # Root Admin
-        "8989792276": "5678", # Employer
-        "8989792275": "9012", # Employee
-        "9301717807": "3456"  # Test Account
-    }
+    is_test_account = clean_phone in TEST_ACCOUNTS
     
-    is_test_account = False
-    if clean_phone and clean_phone in TEST_ACCOUNTS:
-        otp_code = TEST_ACCOUNTS[clean_phone]
-        is_test_account = True
-    # =================================================================
+    if is_test_account:
+        # Override with test OTPs if it's a dummy account
+        bypass_dict = {"9999999999": "1234", "8989792276": "5678", "8989792275": "9012", "9301717807": "3456"}
+        otp_code = bypass_dict.get(clean_phone, "1234")
 
+    # 4. Handle Email vs Mobile
     if is_email(identifier):
-        # --- SECONDARY: Email Flow ---
-        if not user:
-            return {"message": "If this email is registered, an OTP has been sent."}
-
         user.otp_code = otp_code
         user.otp_expires_at = now + timedelta(minutes=5)
         user.last_otp_requested_at = now 
@@ -370,75 +369,54 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
         dest_type = "email"
         
     else:
-        # --- PRIMARY: Mobile Flow ---
         hashed_otp = get_password_hash(otp_code)
         
-        # Determine exact user type
+        # Determine exact user type for the tracker
         user_type = "unknown" 
-        if user:
-            user.last_otp_requested_at = now
-            await user.save()
-            if isinstance(user, Admin):
-                user_type = "admin"
-            elif isinstance(user, Employer):
-                user_type = "employer"
-            else:
-                user_type = "employee"
+        user.last_otp_requested_at = now
+        await user.save()
+        
+        if isinstance(user, Admin):
+            user_type = "admin"
+        elif isinstance(user, Employer):
+            user_type = "employer"
+        else:
+            user_type = "employee"
 
-        # Check existing OTP tracker for abuse prevention
+        # Track OTP requests to prevent abuse
         otp_record = await OTP.find_one({"phone": clean_phone})
         
         if otp_record:
-            # If the last request was yesterday, reset the counter
             if otp_record.last_request_date.date() < now.date():
                 otp_record.daily_count = 0
                 
-            # THE HARD CAP: Block if more than 10 requests today
             if otp_record.daily_count >= 10:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS, 
-                    detail="Daily SMS limit reached. Please try again tomorrow."
-                )
+                raise HTTPException(status_code=429, detail="Daily SMS limit reached.")
                 
-            # Update existing record
             otp_record.hashed_code = hashed_otp
             otp_record.user_type = user_type
             otp_record.daily_count += 1
             otp_record.last_request_date = now
             await otp_record.save()
-            
         else:
-            # First time this phone is requesting an OTP
             new_otp = OTP(
-                phone=clean_phone, 
-                hashed_code=hashed_otp, 
-                user_type=user_type,
-                daily_count=1,
-                last_request_date=now
+                phone=clean_phone, hashed_code=hashed_otp, user_type=user_type,
+                daily_count=1, last_request_date=now
             )
             await new_otp.insert()
         
-        # ONLY trigger the real SMS API if it is NOT a dummy account
+        # Trigger real SMS API
         if not is_test_account:
             await SMSService.send_otp(identifier, otp_code)
             
         dest_type = "mobile number"
 
-    # =================================================================
-    # NEW CODE GOES HERE (Replacing the old return statement)
-    # =================================================================
-    
-    # For local development convenience, print the OTP to your terminal
-    print(f" DEV ALERT: OTP for {identifier} is {otp_code}")
+    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
 
-    # Create a dynamic response payload
-    response_payload = {"message": f"OTP has been successfully sent to your {dest_type}."}
-    
-    # If you have a settings.DEBUG flag, use that. 
-    # Otherwise, this safely prints the OTP directly into Postman/Mobile App during development
-    response_payload["dev_otp_bypass"] = otp_code 
-
-    return response_payload
+    return {
+        "message": f"OTP has been successfully sent to your {dest_type}.",
+        "dev_otp_bypass": otp_code 
+    }
 
 
 # ==============================================================================
