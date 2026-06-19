@@ -303,12 +303,8 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         "status": "success",
         "action": "login",
         "access_token": access_token, 
-        "token_type": "bearer",
         "user_type": user_type,
-        "user_id": str(user.id),
-        "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
-    }
-
+        }
 
 # ==============================================================================
 # --- UNIVERSAL OTP REQUEST SYSTEM ---
