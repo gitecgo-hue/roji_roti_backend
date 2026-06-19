@@ -288,7 +288,7 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         return {
             "status": "unregistered",
             "action": "redirect_to_register",
-            "message": "Number verified, but no account exists. Please sign up.",
+            "message": "No account exists with this number. Please sign up.",
             "registration_token": registration_token,
             "verified_phone": verified_identity
         }
