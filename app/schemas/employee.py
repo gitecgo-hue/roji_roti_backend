@@ -101,7 +101,7 @@ class EmployeeDashboardResponse(BaseModel):
     name: str
     category: str
     is_available: bool
-    total_unlocks: int  # How many employers have paid to see their number
+    total_unlocks: int
     location: str
     daily_rate: Optional[float]
     rating: float = 0.0
