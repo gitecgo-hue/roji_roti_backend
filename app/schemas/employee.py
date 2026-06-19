@@ -76,6 +76,7 @@ class EmployeeResponse(BaseModel):
     phone: str
     name: str
     category: str
+    location_name: str
     availability_status: bool 
     rating: float = Field(default=0.0, description="1-5 star aggregate rating")
     created_at: datetime

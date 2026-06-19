@@ -33,7 +33,6 @@ class Employee(Document):
     last_otp_requested_at: Optional[datetime] = None
     
     # --- Location Data (Integrated) ---
-    location_name: str  
     current_location: Optional[GeoLocation] = None 
     preferred_locations: List[str] = []
     
