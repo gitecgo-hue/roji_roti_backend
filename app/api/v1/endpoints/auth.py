@@ -433,7 +433,7 @@ async def request_otp_challenge(data: OTPRequest, request: Request):
     # =================================================================
     
     # For local development convenience, print the OTP to your terminal
-    print(f"🔐 DEV ALERT: OTP for {identifier} is {otp_code}")
+    print(f" DEV ALERT: OTP for {identifier} is {otp_code}")
 
     # Create a dynamic response payload
     response_payload = {"message": f"OTP has been successfully sent to your {dest_type}."}
