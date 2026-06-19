@@ -71,6 +71,20 @@ async def get_user_by_identifier(identifier: str):
 # --- ADMIN AUTHENTICATION ENDPOINTS ---
 # ==============================================================================
 
+@router.post("/admin/request-otp")
+async def request_admin_otp(data: OTPRequest): 
+    # Grab the identifier instead of phone
+    clean_phone = data.identifier[-10:] 
+
+    # 1. THE GATEKEEPER CHECK: Does this admin exist?
+    existing_admin = await Admin.find_one({"phone": clean_phone})
+    
+    if not existing_admin:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Admin account not found. Please contact the Super Admin to register."
+        )
+
 @router.post("/admin/login", response_model=dict)
 @limiter.limit("5/minute")
 async def admin_login(data: UnifiedLoginRequest, request: Request):

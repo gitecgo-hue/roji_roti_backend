@@ -18,6 +18,7 @@ from app.api.v1.router import api_router
 from app.api.v1.endpoints import ivr
 from dotenv import load_dotenv
 
+
 # Load environment variables from .env file
 load_dotenv()
 
