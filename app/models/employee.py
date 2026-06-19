@@ -25,7 +25,7 @@ class Employee(Document):
     experience_years: Optional[int] = None
     daily_rate: Optional[float] = None
     is_available: bool = True
-    category: str
+    category: Optional[str] = None
     rating: float = 0.0
     total_reviews: int = 0
     profile_picture_url: Optional[str] = None
