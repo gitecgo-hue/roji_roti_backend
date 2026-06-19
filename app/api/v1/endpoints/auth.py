@@ -219,12 +219,12 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
     """
     Master OTP Verification Endpoint.
     - If user exists -> Logs them in.
-    - If user does NOT exist -> Creates a skeleton Employee profile and logs them in.
+    - If user does NOT exist -> Rejects login, returns a registration_token to sign up.
     """
     identity_type = "email" if is_email(data.identifier) else "phone"
     
     # =====================================================================
-    # STEP 1: VERIFY THE OTP FIRST (Before we care who they are)
+    # STEP 1: VERIFY THE OTP FIRST
     # =====================================================================
     if identity_type == "phone":
         clean_phone = data.identifier[-10:]
@@ -237,23 +237,17 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         }
         
         if clean_phone in TEST_ACCOUNTS and data.otp_code == TEST_ACCOUNTS[clean_phone]:
-            # Skip the database check entirely!
             verified_identity = clean_phone
-            
         else:
-            # Standard Database Verification
             otp_record = await OTP.find_one({"phone": clean_phone})
-            
             if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
                 raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
             
-            # OTP is correct, consume it by setting to None (DO NOT DELETE THE TRACKER)
             otp_record.hashed_code = None
             await otp_record.save()
             verified_identity = clean_phone
         
     else:
-        # Email Verification
         user = await get_user_by_identifier(data.identifier)
         if not user:
             raise HTTPException(status_code=404, detail="Email not registered.")
@@ -269,48 +263,50 @@ async def unified_login(data: UnifiedLoginRequest, request: Request):
         verified_identity = data.identifier
 
     # =====================================================================
-    # STEP 2: THE UPSERT LOGIC (Check if Old or New)
+    # STEP 2: THE STRICT GATEKEEPER (Login vs Registration Pivot)
     # =====================================================================
     user = await get_user_by_identifier(data.identifier)
-    is_new_profile = False
 
-    # Security Upgrade: Block Admins from the public portal
     if isinstance(user, Admin):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Administrators must use the dedicated /admin/login portal."
         )
 
+    # --- ROUTE A: UNREGISTERED USER (Pivot to Sign Up) ---
     if not user:
         if identity_type == "email":
-            # We don't allow seamless email registration, only mobile
             raise HTTPException(status_code=404, detail="Email not registered.")
             
-        # It's a new user! Create a skeleton profile instantly.
-        is_new_profile = True
-        user = Employee(
-            phone=verified_identity,
-            is_approved=False, # They must complete their profile/KYC later
-            is_active=True
+        # Do NOT create a user here! Just give them a temporary pass to the signup page.
+        registration_token = create_access_token(
+            subject=verified_identity, 
+            user_type="registration_token",
+            expires_delta=timedelta(minutes=15)
         )
-        await user.insert()
-        user_type = "employee"
-    else:
-        if not getattr(user, "is_active", True):
-            raise HTTPException(status_code=403, detail="Account is suspended.")
-        user_type = "employer" if isinstance(user, Employer) else "employee"
+        
+        return {
+            "status": "unregistered",
+            "action": "redirect_to_register",
+            "message": "Number verified, but no account exists. Please sign up.",
+            "registration_token": registration_token,
+            "verified_phone": verified_identity
+        }
 
-    # Generate standard Access Token for the app
+    # --- ROUTE B: EXISTING USER (Standard Login) ---
+    if not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Account is suspended.")
+
+    user_type = "employer" if isinstance(user, Employer) else "employee"
+    
     access_token = create_access_token(subject=str(user.id), user_type=user_type)
     
     return {
         "status": "success",
         "action": "login",
-        "message": "Authentication successful",
         "access_token": access_token, 
         "token_type": "bearer",
         "user_type": user_type,
-        "is_new_profile": is_new_profile,  # The frontend uses this!
         "user_id": str(user.id),
         "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
     }
