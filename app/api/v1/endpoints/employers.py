@@ -34,7 +34,7 @@ router = APIRouter()
 # =====================================================================
 
 class EmployerRegistrationRequest(BaseModel):
-    registration_token: str = Field(..., description="Token received from unified /login endpoint")
+    access_token: str = Field(..., description="Token received from unified /login endpoint")
     company_name: str
     name: str
     email: Optional[EmailStr] = None
@@ -66,11 +66,11 @@ async def register_employer(data: EmployerRegistrationRequest):
     # 1. Securely decode the token to get the verified phone number
     try:
         payload = jwt.decode(
-            data.registration_token, 
+            data.access_token, 
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "registration_token":
+        if payload.get("user_type") != "access_token":
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")

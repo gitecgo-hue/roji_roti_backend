@@ -50,7 +50,7 @@ class LocationInput(BaseModel):
     longitude: float
 
 class EmployeeRegistrationRequest(BaseModel):
-    registration_token: str = Field(..., description="Token received from /verify-signup-otp")
+    access_token: str = Field(..., description="Token received from /verify-signup-otp")
     name: str
     category: str
     location: LocationInput
@@ -81,11 +81,11 @@ async def register_employee(data: EmployeeRegistrationRequest):
     """
     try:
         payload = jwt.decode(
-            data.registration_token, 
+            data.access_token, 
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "registration_token":
+        if payload.get("user_type") != "access_token":
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")

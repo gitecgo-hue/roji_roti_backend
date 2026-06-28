@@ -123,7 +123,7 @@ async def generate_and_send_otp(identifier: str, app_role: str, user=None):
         if otp_record:
             if otp_record.last_request_date.date() < now.date():
                 otp_record.daily_count = 0
-            if otp_record.daily_count >= 10:
+            if otp_record.daily_count >= 100:
                 raise HTTPException(status_code=429, detail="Daily SMS limit reached.")
                 
             otp_record.hashed_code = hashed_otp
@@ -247,16 +247,16 @@ async def unified_login(data: PublicLoginRequest, request: Request):
 
     # --- SCENARIO A: NEW USER VERIFYING OTP FOR SIGNUP ---
     if not user and is_signup:
-        registration_token = create_access_token(
+        access_token = create_access_token(
             subject=data.identifier, 
-            user_type="registration_token",
+            user_type="access_token",
             expires_delta=timedelta(minutes=15)
         )
         return {
             "status": "unregistered",
             "action": "redirect_to_register",
-            "message": "Phone verified. Proceed to registration.",
-            "registration_token": registration_token,
+            "message": "Proceed to registration.",
+            "access_token": access_token,
             "verified_phone": data.identifier
         }
 
@@ -343,61 +343,47 @@ async def request_otp_challenge(data: PublicOTPRequest, request: Request):
     dest_type = await generate_and_send_otp(identifier, app_role, user)
     return {"message": f"OTP has been successfully sent to your {dest_type}."}
 
-
-# ==============================================================================
-# --- SESSION MANAGEMENT ---
-# ==============================================================================
-
-@router.post("/logout")
-async def logout(token: str = Depends(oauth2_scheme)):
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        jti = payload.get("jti")
-        exp = payload.get("exp")
-    except JWTError:
-        return {"status": "success", "message": "Successfully logged out."}
-
-    if jti and exp:
-        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
-        blacklisted_token = TokenBlacklist(jti=jti, expires_at=expires_at)
-        await blacklisted_token.insert()
-
-    return {"status": "success", "message": "Successfully logged out."}
-
-
 # ==============================================================================
 # --- DELIVERY WEBHOOK ---
 # ==============================================================================
 
+@router.get("/webhooks/2factor", include_in_schema=False)
 @router.post("/webhooks/2factor", include_in_schema=False)
 async def twofactor_delivery_webhook(request: Request):
     """
     Listens for delivery receipts from 2Factor.in and updates the database.
-    Hidden from Swagger docs.
+    Handles both GET (Query Params) and POST (JSON/Form) methods.
     """
     try:
-        # 2Factor might send data as JSON or standard form data, so we handle both
-        try:
-            data = await request.json()
-        except:
-            data = dict(await request.form())
+        session_id = None
+        status = None
 
-        # 2Factor typically sends SessionId and Status
-        session_id = data.get("SessionId") or data.get("Session_Id")
-        status = data.get("Status")
+        # 1. Handle GET Request (2Factor's default behavior)
+        if request.method == "GET":
+            session_id = request.query_params.get("SessionId") or request.query_params.get("Session_Id")
+            status = request.query_params.get("Status")
 
+        # 2. Handle POST Request (Fallback)
+        elif request.method == "POST":
+            try:
+                data = await request.json()
+            except:
+                data = dict(await request.form())
+            
+            session_id = data.get("SessionId") or data.get("Session_Id")
+            status = data.get("Status")
+
+        # 3. Process the Data
         if session_id and status:
-            # Find the exact OTP request in your database
             otp_record = await OTP.find_one({"session_id": session_id})
             
             if otp_record:
-                # Update it with the real outcome from the telecom operator!
                 otp_record.delivery_status = status.upper() 
                 await otp_record.save()
-                
-                print(f"WEBHOOK ALERT: SMS to {otp_record.phone} is now {status.upper()}")
+                print(f"WEBHOOK SUCCESS: SMS to {otp_record.phone} is now {status.upper()}")
+            else:
+                print(f"WEBHOOK WARNING: Received status '{status}' but could not find SessionId: {session_id} in database.")
 
-        # You MUST return a 200 OK so 2Factor knows you received it.
         return {"status": "received"}
 
     except Exception as e:
