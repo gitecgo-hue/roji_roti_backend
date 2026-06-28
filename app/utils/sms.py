@@ -13,12 +13,13 @@ class SMSService:
     @staticmethod
     async def _send_to_provider(phone: str, message: str, otp: str = None) -> bool:
         """
-        Internal router that sends the message to the configured provider.
-        Supports Mocking in DEBUG mode.
+        Internal router that sends the message.
+        Supports Mocking in DEBUG mode to save API credits during development.
         """
         formatted_phone = SMSService._format_phone(phone)
 
-        if settings.DEBUG:
+        # 1. Debug Bypass (Prints to terminal instead of sending real SMS)
+        if getattr(settings, "DEBUG", False):
             logger.info(f"--- DEBUG SMS ---")
             logger.info(f"To: {formatted_phone}")
             logger.info(f"Body: {message}")
@@ -26,54 +27,46 @@ class SMSService:
             logger.info(f"-----------------")
             return True
 
-        if settings.SMS_PROVIDER == "msg91":
-            return await SMSService._send_msg91(formatted_phone, message, otp)
-        elif settings.SMS_PROVIDER == "twilio":
-            return await SMSService._send_twilio(formatted_phone, message)
-        
-        logger.warning(f"No SMS provider configured for {formatted_phone}")
-        return False
+        # 2. Production: Route strictly to 2Factor.in
+        return await SMSService._send_2factor(phone, otp)
+
+    # --- Provider Integrations ---
 
     @staticmethod
-    async def _send_msg91(phone: str, message: str, otp: str = None) -> bool:
-        """Integration for MSG91 (Indian Regional Support)."""
-        # MSG91 OTP API uses a slightly different endpoint than generic messages
-        url = "https://api.msg91.com/api/v5/otp" if otp else "https://api.msg91.com/api/v5/flow/"
+    async def _send_2factor(phone: str, otp: str) -> bool:
+        """Integration for 2Factor.in (Specialized OTP Support)."""
+        if not otp:
+            logger.warning("Currently, the 2Factor integration only supports OTP messages.")
+            return False
+
+        # Ensure phone number is just the 10 digits as required by 2Factor
+        clean_phone = phone[-10:]
+        api_key = getattr(settings, "TWO_FACTOR_API_KEY", None)
         
-        payload = {
-            "template_id": settings.SMS_OTP_TEMPLATE_ID if otp else settings.SMS_GENERIC_TEMPLATE_ID,
-            "mobile": phone.replace("+", ""),
-            "authkey": settings.SMS_AUTH_KEY,
-            "message": message
-        }
-        if otp: payload["otp"] = otp
+        if not api_key:
+            logger.error("2Factor API Key is missing from environment variables.")
+            return False
 
-        async with httpx.AsyncClient() as client:
-            try:
-                # MSG91 often uses GET for OTP but POST for Flows; adapting to your preference
-                response = await client.post(url, json=payload)
-                return response.status_code == 200
-            except Exception as e:
-                logger.error(f"MSG91 Gateway Error: {e}")
-                return False
+       # Add your exact Template Name to the end of the URL string
+        template_name = getattr(settings, "TWO_FACTOR_TEMPLATE_ID", None)
+        if not template_name:
+            logger.error("2Factor Template ID is missing from environment variables.")
+            return False
+        url = f"https://2factor.in/API/V1/{api_key}/SMS/{clean_phone}/{otp}/{template_name}"
 
-    @staticmethod
-    async def _send_twilio(phone: str, message: str) -> bool:
-        """Integration for Twilio (Global Support)."""
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_SID}/Messages.json"
-        auth = (settings.TWILIO_SID, settings.TWILIO_AUTH_TOKEN)
-        data = {
-            "To": phone,
-            "From": settings.TWILIO_PHONE_NUMBER,
-            "Body": message
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, data=data, auth=auth)
-                return response.status_code == 201
-            except Exception as e:
-                logger.error(f"Twilio Gateway Error: {e}")
-                return False
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                data = response.json()
+
+                if data.get("Status") == "Success":
+                    return True
+                else:
+                    logger.error(f"2Factor API Error: {data.get('Details')}")
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to connect to 2Factor API: {str(e)}")
+            return False
 
     # --- Business Logic Methods ---
 

@@ -17,12 +17,11 @@ class Settings(BaseSettings):
     MONGODB_URL: str
     DATABASE_NAME: str  # Required field from snippet 2
 
-    # --- SMS Gateway (MSG91 / Twilio) ---
-    SMS_PROVIDER: str = "msg91"
-    SMS_AUTH_KEY: Optional[str] = None
-    SMS_OTP_TEMPLATE_ID: Optional[str] = None
-    SMS_JOB_ALERT_TEMPLATE_ID: Optional[str] = None
-    SMS_GENERIC_TEMPLATE_ID: Optional[str] = None
+    # --- SMS Gateway (2Factor) ---
+    SMS_PROVIDER: str = "2factor"
+    TWO_FACTOR_API_KEY: Optional[str] = None
+    TWO_FACTOR_TEMPLATE_ID: Optional[str] = None
+    TWO_FACTOR_SENDER_ID: Optional[str] = None
 
     # --- Twilio Backup ---
     TWILIO_SID: Optional[str] = None
