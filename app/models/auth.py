@@ -19,6 +19,9 @@ class OTP(Document):
     # Standard creation timestamp (CRITICAL: Removed TTL index so daily_count persists!)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    session_id: Optional[str] = None
+    delivery_status: str = "PENDING"
+
     class Settings:
         name = "otps"
 
