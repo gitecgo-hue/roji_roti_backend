@@ -25,12 +25,10 @@ from app.services.email import EmailService
 from app.api.dependencies import get_current_user
 
 router = APIRouter()
-
-# This tells FastAPI where to look for the token for endpoints in this router
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # ==============================================================================
-# --- PYDANTIC SCHEMAS ---
+# --- PYDANTIC SCHEMAS (Notice: is_signup flag is completely gone!) ---
 # ==============================================================================
 
 class AdminOTPRequest(BaseModel):
@@ -43,13 +41,11 @@ class AdminLoginRequest(BaseModel):
 class PublicOTPRequest(BaseModel):
     identifier: str
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
-    is_signup: bool = Field(default=False, description="True if requesting from the registration page")
 
-class PublicLoginRequest(BaseModel):
+class PublicVerifyRequest(BaseModel):
     identifier: str = Field(..., description="Mobile number (Primary) or Email (Secondary)")
     otp_code: str = Field(..., description="Primary authentication method")
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
-    is_signup: bool = Field(default=False, description="True if verifying OTP during registration")
 
 class UpdateAdminPhoneRequest(BaseModel):
     new_phone: str = Field(..., description="The new admin mobile number")
@@ -64,7 +60,6 @@ def is_email(identifier: str) -> bool:
     return bool(re.match(r"[^@]+@[^@]+\.[^@]+", identifier))
 
 async def get_user_by_identifier(identifier: str):
-    """Utility to find a user (Admin, Employer, or Employee) by phone or email."""
     if is_email(identifier):
         return await Admin.find_one({"email": identifier}) or \
                await Employer.find_one({"email": identifier}) or \
@@ -99,7 +94,7 @@ async def verify_and_consume_otp(identifier: str, otp_code: str, is_email_auth: 
         await otp_record.save()
 
 async def generate_and_send_otp(identifier: str, app_role: str, user=None):
-    """Helper to generate and send OTP via SMS/Email"""
+    """Helper to generate and send OTP via SMS/Email and track Webhook Session"""
     now = datetime.utcnow()
     otp_code = ''.join(random.choices(string.digits, k=4))
 
@@ -123,7 +118,7 @@ async def generate_and_send_otp(identifier: str, app_role: str, user=None):
         if otp_record:
             if otp_record.last_request_date.date() < now.date():
                 otp_record.daily_count = 0
-            if otp_record.daily_count >= 100:
+            if otp_record.daily_count >= 10:
                 raise HTTPException(status_code=429, detail="Daily SMS limit reached.")
                 
             otp_record.hashed_code = hashed_otp
@@ -134,13 +129,11 @@ async def generate_and_send_otp(identifier: str, app_role: str, user=None):
         else:
             new_otp = OTP(phone=clean_phone, hashed_code=hashed_otp, user_type=app_role, daily_count=1, last_request_date=now)
             await new_otp.insert()
-            # Re-fetch to guarantee we have the object to update the session_id
             otp_record = await OTP.find_one({"phone": clean_phone})
         
-        # Trigger real SMS API and get the session ID
+        # Trigger real SMS API and get the session ID for the webhook
         session_id = await SMSService.send_otp(identifier, otp_code)
         
-        # Save the session ID to the database so the webhook can find it later
         if session_id and otp_record:
             otp_record.session_id = session_id
             otp_record.delivery_status = "PENDING"
@@ -150,19 +143,126 @@ async def generate_and_send_otp(identifier: str, app_role: str, user=None):
 
 
 # ==============================================================================
-# --- ADMIN AUTHENTICATION ENDPOINTS (FIREWALLED) ---
+# --- 1. THE STRICT LOGIN FLOW (For Existing Users Only) ---
+# ==============================================================================
+
+@router.post("/login/request-otp")
+@limiter.limit("3/minute")
+async def request_login_otp(data: PublicOTPRequest, request: Request):
+    """Requests an OTP for Login. BLOCKS UNREGISTERED NUMBERS."""
+    app_role = data.app_role.lower()
+    user = await get_user_by_identifier(data.identifier)
+
+    # BLOCK NEW USERS
+    if not user:
+        raise HTTPException(status_code=404, detail=f"This {app_role} account does not exist. Please go to Sign Up.")
+    
+    if isinstance(user, Admin):
+        raise HTTPException(status_code=403, detail="Administrators must use the dedicated admin portal.")
+        
+    actual_role = "employer" if isinstance(user, Employer) else "employee"
+    if actual_role != app_role:
+        raise HTTPException(status_code=403, detail=f"Access Denied: Registered as {actual_role.capitalize()}.")
+
+    if getattr(user, "last_otp_requested_at", None):
+        if datetime.utcnow() - user.last_otp_requested_at < timedelta(seconds=60):
+            raise HTTPException(status_code=429, detail="Please wait 60 seconds.")
+
+    dest_type = await generate_and_send_otp(data.identifier, app_role, user)
+    return {"message": f"OTP sent to your {dest_type}."}
+
+
+@router.post("/login", response_model=dict)
+@limiter.limit("5/minute")
+async def login_verify(data: PublicVerifyRequest, request: Request):
+    """Verifies OTP and logs the user in, returning an Access Token."""
+    is_email_auth = is_email(data.identifier)
+    app_role = data.app_role.lower()
+
+    # Verify the user actually exists before checking OTP
+    user = await get_user_by_identifier(data.identifier)
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found. Please register.")
+        
+    actual_role = "employer" if isinstance(user, Employer) else "employee"
+    if not getattr(user, "is_active", True):
+        raise HTTPException(status_code=403, detail="Account is suspended.")
+
+    # Verify OTP
+    await verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
+    
+    # Issue Token
+    access_token = create_access_token(subject=str(user.id), user_type=actual_role)
+    
+    return {
+        "status": "success",
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "user_type": actual_role,
+        "user_id": str(user.id),
+        "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
+    }
+
+
+# ==============================================================================
+# --- 2. THE STRICT SIGN-UP FLOW (For New Users Only) ---
+# ==============================================================================
+
+@router.post("/register/request-otp")
+@limiter.limit("3/minute")
+async def request_signup_otp(data: PublicOTPRequest, request: Request):
+    """Requests an OTP for Sign-Up. BLOCKS ALREADY REGISTERED NUMBERS."""
+    app_role = data.app_role.lower()
+    user = await get_user_by_identifier(data.identifier)
+
+    # BLOCK EXISTING USERS
+    if user:
+        raise HTTPException(status_code=409, detail="This number is already registered. Please go to Login.")
+
+    dest_type = await generate_and_send_otp(data.identifier, app_role, user=None)
+    return {"message": f"OTP sent to your {dest_type}."}
+
+
+@router.post("/register/verify-otp", response_model=dict)
+@limiter.limit("5/minute")
+async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
+    """Verifies Sign-Up OTP and returns a temporary Registration Token."""
+    is_email_auth = is_email(data.identifier)
+    
+    # Double check they didn't register in the last 5 minutes (prevent race conditions)
+    user = await get_user_by_identifier(data.identifier)
+    if user:
+        raise HTTPException(status_code=409, detail="Number already registered.")
+
+    # Verify OTP
+    await verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
+
+    # Issue Temporary Registration Token
+    registration_token = create_access_token(
+        subject=data.identifier, 
+        user_type="registration_token",
+        expires_delta=timedelta(minutes=15)
+    )
+    
+    return {
+        "status": "success",
+        "message": "Phone verified. Proceed to registration.",
+        "registration_token": registration_token,
+        "verified_phone": data.identifier
+    }
+
+
+# ==============================================================================
+# --- 3. ADMIN AUTHENTICATION (Unchanged) ---
 # ==============================================================================
 
 @router.post("/admin/request-otp")
 async def request_admin_otp(data: AdminOTPRequest): 
     clean_phone = data.identifier[-10:] 
-
     existing_admin = await Admin.find_one({"phone": clean_phone})
     if not existing_admin:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Admin account not found. Please contact the Super Admin to register."
-        )
+        raise HTTPException(status_code=404, detail="Admin account not found.")
+    
     await generate_and_send_otp(clean_phone, "admin", existing_admin)
     return {"message": "Admin OTP Sent"}
 
@@ -186,162 +286,27 @@ async def admin_login(data: AdminLoginRequest, request: Request):
         "role": user.role, "user_name": user.name
     }
 
-@router.patch("/admin/me/phone", status_code=status.HTTP_200_OK)
-async def update_admin_phone(data: UpdateAdminPhoneRequest, current_admin = Depends(get_current_user)):
-    admin_doc = await Admin.get(ObjectId(current_admin["id"]))
-    if not admin_doc:
-        raise HTTPException(status_code=404, detail="Admin document mismatch.")
-
-    clean_new_phone = data.new_phone[-10:]
-
-    if getattr(admin_doc, "phone", None) == clean_new_phone:
-        raise HTTPException(status_code=400, detail="This is already your registered phone number.")
-
-    phone_taken = await Admin.find_one({"phone": clean_new_phone}) or \
-                  await Employer.find_one({"phone": clean_new_phone}) or \
-                  await Employee.find_one({"phone": clean_new_phone})
-    
-    if phone_taken:
-        raise HTTPException(status_code=409, detail="Phone number is actively linked to another entity.")
-
-    otp_record = await OTP.find_one({"phone": clean_new_phone})
-    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
-        raise HTTPException(status_code=401, detail="Verification failed: Invalid or expired OTP.")
-
-    otp_record.hashed_code = None
-    await otp_record.save()
-
-    admin_doc.phone = clean_new_phone
-    await admin_doc.save()
-
-    return {"status": "success", "message": "Administrative phone registry successfully updated.", "new_phone": admin_doc.phone}
-
 
 # ==============================================================================
-# --- PUBLIC AUTHENTICATION ENDPOINTS ---
+# --- SESSION MANAGEMENT ---
 # ==============================================================================
 
-@router.post("/login", response_model=dict)
-@limiter.limit("5/minute")
-async def unified_login(data: PublicLoginRequest, request: Request):
-    """
-    Master OTP Verification Endpoint.
-    Strictly checks the requested app_role to prevent cross-app login.
-    """
-    identity_type = "email" if is_email(data.identifier) else "phone"
-    app_role = data.app_role.lower()
-    is_signup = data.is_signup
+@router.post("/logout")
+async def logout(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+    except JWTError:
+        return {"status": "success", "message": "Successfully logged out."}
 
-    if app_role not in ["employer", "employee"]:
-        raise HTTPException(status_code=400, detail="Invalid app_role. Must be 'employer' or 'employee'.")
+    if jti and exp:
+        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+        blacklisted_token = TokenBlacklist(jti=jti, expires_at=expires_at)
+        await blacklisted_token.insert()
 
-    # 1. Verify OTP
-    is_email_auth = is_email(data.identifier)
-    await verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
+    return {"status": "success", "message": "Successfully logged out."}
 
-    # 2. THE SMART ROLE GATEKEEPER
-    user = await get_user_by_identifier(data.identifier)
-
-    if isinstance(user, Admin):
-        raise HTTPException(status_code=403, detail="Administrators must use the dedicated /admin portal.")
-
-    # --- SCENARIO A: NEW USER VERIFYING OTP FOR SIGNUP ---
-    if not user and is_signup:
-        access_token = create_access_token(
-            subject=data.identifier, 
-            user_type="access_token",
-            expires_delta=timedelta(minutes=15)
-        )
-        return {
-            "status": "unregistered",
-            "action": "redirect_to_register",
-            "message": "Proceed to registration.",
-            "access_token": access_token,
-            "verified_phone": data.identifier
-        }
-
-    # --- SCENARIO B: USER TRYING TO LOGIN, BUT DOESN'T EXIST ---
-    if not user and not is_signup:
-        raise HTTPException(status_code=404, detail=f"This {app_role} account does not exist. Please sign up.")
-
-    # --- SCENARIO C: USER TRYING TO SIGN UP, BUT ALREADY EXISTS ---
-    if user and is_signup:
-        raise HTTPException(status_code=409, detail="This number is already registered. Please go to the Login page.")
-
-    # --- SCENARIO D: EXISTING USER LOGGING IN (Standard Flow) ---
-    actual_role = "employer" if isinstance(user, Employer) else "employee"
-    if actual_role != app_role:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access Denied: This number is registered as an {actual_role.capitalize()}."
-        )
-
-    if not getattr(user, "is_active", True):
-        raise HTTPException(status_code=403, detail="Account is suspended.")
-    
-    access_token = create_access_token(subject=str(user.id), user_type=actual_role)
-    
-    return {
-        "status": "success",
-        "action": "login",
-        "access_token": access_token, 
-        "token_type": "bearer",
-        "user_type": actual_role,
-        "user_id": str(user.id),
-        "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
-    }
-
-@router.post("/resend-otp")
-@router.post("/request-otp")
-@limiter.limit("2/minute")
-async def request_otp_challenge(data: PublicOTPRequest, request: Request):
-    """
-    Universal OTP Request.
-    Smart Gate: Blocks unregistered users from logging in, and blocks existing users from signing up.
-    """
-    identifier = data.identifier
-    app_role = data.app_role.lower()
-    is_signup = data.is_signup
-    
-    if app_role not in ["employer", "employee"]:
-        raise HTTPException(status_code=400, detail="Invalid app_role.")
-
-    # 1. THE SMART GATEKEEPER
-    user = await get_user_by_identifier(identifier)
-
-    # SCENARIO A: They are trying to LOGIN, but don't have an account
-    if not user and not is_signup:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"This {app_role} account does not exist. Please go to the Sign Up page to register."
-        )
-
-    # SCENARIO B: They are trying to SIGN UP, but already have an account
-    if user and is_signup:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, 
-            detail=f"This number is already registered. Please go to the Login page."
-        )
-
-    # Cross-Login Check
-    if user:
-        if isinstance(user, Admin):
-            raise HTTPException(status_code=403, detail="Administrators must use the dedicated admin portal.")
-            
-        actual_role = "employer" if isinstance(user, Employer) else "employee"
-        if actual_role != app_role:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access Denied: This number is registered as an {actual_role.capitalize()}."
-            )
-
-    # 2. Cooldown Check
-    if user and getattr(user, "last_otp_requested_at", None):
-        if datetime.utcnow() - user.last_otp_requested_at < timedelta(seconds=60):
-            raise HTTPException(status_code=429, detail="Too many requests. Please wait 60 seconds.")
-    
-    dest_type = await generate_and_send_otp(identifier, app_role, user)
-    return {"message": f"OTP has been successfully sent to your {dest_type}."}
 
 # ==============================================================================
 # --- DELIVERY WEBHOOK ---
@@ -358,31 +323,23 @@ async def twofactor_delivery_webhook(request: Request):
         session_id = None
         status = None
 
-        # 1. Handle GET Request (2Factor's default behavior)
         if request.method == "GET":
             session_id = request.query_params.get("SessionId") or request.query_params.get("Session_Id")
             status = request.query_params.get("Status")
-
-        # 2. Handle POST Request (Fallback)
         elif request.method == "POST":
             try:
                 data = await request.json()
             except:
                 data = dict(await request.form())
-            
             session_id = data.get("SessionId") or data.get("Session_Id")
             status = data.get("Status")
 
-        # 3. Process the Data
         if session_id and status:
             otp_record = await OTP.find_one({"session_id": session_id})
-            
             if otp_record:
                 otp_record.delivery_status = status.upper() 
                 await otp_record.save()
-                print(f"WEBHOOK SUCCESS: SMS to {otp_record.phone} is now {status.upper()}")
-            else:
-                print(f"WEBHOOK WARNING: Received status '{status}' but could not find SessionId: {session_id} in database.")
+                print(f"✅ WEBHOOK SUCCESS: SMS to {otp_record.phone} is now {status.upper()}")
 
         return {"status": "received"}
 
