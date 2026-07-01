@@ -30,7 +30,7 @@ from app.models.payment import Payment
 from app.models.review import Review 
 from app.models.notification import Notification
 from app.models.auth import OTP 
-# Note: Ensure app.models.category is imported if Category is used below (e.g., from app.models.category import Category)
+from app.models.category import Category # Added to support the /categories endpoint
 
 # --- Services ---
 from app.services.webhooks import WebhookService 
@@ -38,6 +38,7 @@ from app.utils.storage import StorageService
 from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
 from app.services.kyc import KYCService
+from app.utils.maps import MapService
 
 router = APIRouter()
 
@@ -53,8 +54,11 @@ class EmployeeRegistrationRequest(BaseModel):
     access_token: str = Field(..., description="Token received from /verify-signup-otp")
     name: str
     category: str
-    location: LocationInput
     location_name: str
+    
+    # --- MADE OPTIONAL FOR OLA MAPS AUTO-FILL ---
+    location: Optional[LocationInput] = Field(default=None, description="Backend will auto-fill this using Ola Maps")
+    
     preferred_locations: List[str] = []
     experience: int = 0
     languages: List[str] = []
@@ -78,14 +82,16 @@ class UpdatePhoneRequest(BaseModel):
 async def register_employee(data: EmployeeRegistrationRequest):
     """
     Register a new blue-collar worker profile securely using a verified OTP token.
+    Auto-Geocodes the location using Ola Maps if coordinates are not provided.
     """
+    # 1. Verify the Registration Session Token
     try:
         payload = jwt.decode(
             data.access_token, 
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "access_token":
+        if payload.get("user_type") != "registration_token":
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")
@@ -95,13 +101,37 @@ async def register_employee(data: EmployeeRegistrationRequest):
             detail="Invalid or expired registration session. Please verify your OTP again."
         )
 
+    # 2. Check if phone already exists
     existing_employee = await Employee.find_one(Employee.phone == verified_phone)
     if existing_employee:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this phone number already exists."
         )
-    
+
+    # =================================================================
+    # 3. OLA MAPS MAGIC: Auto-Geocode the typed location
+    # =================================================================
+    if data.location_name and not data.location:
+        coords = await MapService.get_coordinates(data.location_name)
+        
+        if coords:
+            # Overwrite with the exact data from Ola Maps
+            data.location = LocationInput(
+                latitude=coords["latitude"],
+                longitude=coords["longitude"]
+            )
+            # Clean up the user's messy typing with Ola's official address
+            data.location_name = coords["formatted_address"]
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Could not find coordinates for '{data.location_name}'. Please try a more specific area."
+            )
+    elif not data.location and not data.location_name:
+        raise HTTPException(status_code=400, detail="A location name must be provided.")
+
+    # 4. Save to Database
     geo_location = GeoLocation(
         type="Point",
         coordinates=[data.location.longitude, data.location.latitude]
@@ -128,6 +158,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
     
     await new_employee.insert()
 
+    # 5. Trigger Webhook & Generate Login Token
     await WebhookService.trigger_event("worker_registered", {
         "worker_id": str(new_employee.id),
         "name": new_employee.name,
@@ -142,7 +173,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
     
     return {
         "status": "success",
-        "message": "Registration successful",
+        "message": "User registered successfully with verified coordinates!",
         "access_token": access_token,
         "token_type": "bearer",
         "employee": EmployeeResponse(
@@ -581,6 +612,5 @@ async def get_all_categories():
     """
     Returns a simple list of category names for the registration dropdown.
     """
-    # Requires Category to be imported
     categories = await Category.find(Category.is_active == True).to_list()
     return [c.name for c in categories]

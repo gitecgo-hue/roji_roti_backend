@@ -54,7 +54,13 @@ class EmployeeCreate(BaseModel):
     
     # Location data for proximity-based matching
     location_name: str = Field(..., description="Human-readable location name (Required)")
-    location: LocationInput
+    
+    # --- MADE OPTIONAL FOR OLA MAPS AUTO-FILL ---
+    location: Optional[LocationInput] = Field(
+        default=None, 
+        description="Backend will auto-fill this using Ola Maps"
+    )
+    
     preferred_locations: List[str] = Field(default=[], description="Multiple locations selection")
     
     # Profile details
