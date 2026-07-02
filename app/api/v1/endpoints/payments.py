@@ -225,7 +225,7 @@ async def download_receipt(
 # --- 4. RAZORPAY WEBHOOK (The Safety Net) ---
 # =====================================================================
 
-@router.post("/webhook", include_in_schema=False)
+@router.post("/webhook", include_in_schema=True)
 async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Razorpay hits this endpoint asynchronously when a payment succeeds or fails.
@@ -311,86 +311,3 @@ async def process_successful_webhook(order_id: str, payment_id: str):
             
     except Exception as e:
         logger.error(f"Failed to process webhook for order {order_id}: {str(e)}")
-
-# =====================================================================
-# --- 5. PUBLIC / TEST ENDPOINTS (For main.py compatibility) ---
-# =====================================================================
-
-@router.post("/public/create-order", status_code=status.HTTP_201_CREATED)
-async def public_create_order(request: CreateOrderRequest):
-    """
-    Unauthenticated test endpoint for triggering Razorpay popups.
-    (Kept for compatibility with main.py testing routes).
-    """
-    try:
-        client = get_razorpay_client()
-        order = client.order.create(data={
-            "amount": request.amount,
-            "currency": request.currency,
-            "receipt": request.receipt,
-        })
-        return {
-            "order_id": order["id"],
-            "amount": order["amount"],
-            "currency": order["currency"],
-            "key_id": settings.RAZORPAY_KEY_ID,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Razorpay Error: {str(e)}")
-    
-# =====================================================================
-# --- 5. PUBLIC / TEST ENDPOINTS (For main.py compatibility) ---
-# =====================================================================
-
-class CreateOrderRequest(BaseModel):
-    amount: int
-    currency: str = "INR"
-    receipt: str = "roji-roti-checkout"
-
-class PublicPaymentVerificationRequest(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
-
-@router.post("/public/create-order", status_code=status.HTTP_201_CREATED)
-async def public_create_order(request: CreateOrderRequest):
-    """
-    Unauthenticated test endpoint for triggering Razorpay popups.
-    (Kept for compatibility with main.py testing routes).
-    """
-    try:
-        client = get_razorpay_client()
-        order = client.order.create(data={
-            "amount": request.amount,
-            "currency": request.currency,
-            "receipt": request.receipt,
-        })
-        return {
-            "order_id": order["id"],
-            "amount": order["amount"],
-            "currency": order["currency"],
-            "key_id": settings.RAZORPAY_KEY_ID,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Razorpay Error: {str(e)}")
-
-
-@router.post("/public/verify-payment", status_code=status.HTTP_200_OK)
-async def public_verify_payment(request: PublicPaymentVerificationRequest):
-    """
-    Unauthenticated test endpoint for verifying Razorpay signatures.
-    (Kept for compatibility with main.py testing routes).
-    """
-    try:
-        client = get_razorpay_client()
-        client.utility.verify_payment_signature({
-            'razorpay_order_id': request.razorpay_order_id,
-            'razorpay_payment_id': request.razorpay_payment_id,
-            'razorpay_signature': request.razorpay_signature
-        })
-        return {
-            "verified": True,
-            "message": "Payment verified successfully.",
-        }
-    except razorpay.errors.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid payment signature.")

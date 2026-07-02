@@ -85,24 +85,6 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])
 
-@app.post("/api/create-order")
-async def create_order_alias(request: dict):
-    from app.api.v1.endpoints.payments import CreateOrderRequest, public_create_order
-    return await public_create_order(CreateOrderRequest(**request))
-
-
-@app.post("/api/verify-payment")
-async def verify_payment_alias(request: dict):
-    from app.api.v1.endpoints.payments import PublicPaymentVerificationRequest, public_verify_payment
-    return await public_verify_payment(PublicPaymentVerificationRequest(**request))
-
-
-@app.get("/checkout", response_class=HTMLResponse)
-async def checkout_page():
-    """Serve the Razorpay checkout page from the backend so it has a valid HTTP origin."""
-    return FileResponse("checkout.html")
-
-
 @app.get("/")
 async def root():
     """Health check endpoint."""
