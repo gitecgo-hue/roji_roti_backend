@@ -1,33 +1,134 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Roji Roti Test Checkout</title>
+    <meta charset="UTF-8" />
+    <title>Roji Roti Checkout</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        button { padding: 15px 30px; font-size: 18px; background: #528FF0; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        #status { margin-top: 20px; font-weight: bold; }
+    </style>
 </head>
-<body style="text-align: center; padding: 50px; font-family: Arial;">
-
+<body>
     <h2>Complete your Pro Subscription</h2>
-    <button id="rzp-button1" style="padding: 15px 30px; font-size: 18px; background: #528FF0; color: white; border: none; border-radius: 5px; cursor: pointer;">
-        Pay Now
-    </button>
+    <button id="rzp-button1">Pay Now</button>
+    <div id="status">Choose a payment amount to continue.</div>
 
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script>
-        var options = {
-            "key": "rzp_test_SjjhFIqOpCV19p", 
-            "amount": "99900",               
-            "currency": "INR",
-            "name": "Roji Roti Premium",
-            "description": "Pro Tier Upgrade",
-            "order_id": "order_Sk7d2Y1AFqZlJZ",
-            "handler": function (response){
-                alert("Payment Successful! Razorpay is now pinging your webhook...");
+        const button = document.getElementById('rzp-button1');
+        const status = document.getElementById('status');
+
+        async function fetchJson(url, options) {
+            const response = await fetch(url, options);
+            const text = await response.text();
+            let data = {};
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch (err) {
+                    data = { detail: text };
+                }
             }
-        };
-        var rzp1 = new Razorpay(options);
-        document.getElementById('rzp-button1').onclick = function(e){
-            rzp1.open();
-            e.preventDefault();
+            if (!response.ok) {
+                console.error('Request failed', { url, status: response.status, data });
+                throw new Error(data.detail || data.error || `Request failed with status ${response.status}`);
+            }
+            return data;
         }
+
+        button.addEventListener('click', async function (e) {
+            e.preventDefault();
+            status.textContent = 'Creating order...';
+
+            const backendHost = 'http://127.0.0.1:8000';
+            const apiBase = window.location.origin.includes('127.0.0.1:8000')
+                ? window.location.origin
+                : backendHost;
+            const createUrl = `${apiBase}/api/create-order`;
+            const verifyUrl = `${apiBase}/api/verify-payment`;
+
+            console.log('Using backend API host:', apiBase);
+            console.log('Create order URL:', createUrl);
+            console.log('Verify payment URL:', verifyUrl);
+
+            try {
+                const orderData = await fetchJson(createUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: 99900, currency: 'INR', receipt: 'roji-roti-checkout' })
+                });
+
+                console.log('Razorpay create-order response:', JSON.stringify(orderData, null, 2));
+                if (!orderData.key_id || !orderData.order_id) {
+                    throw new Error('Invalid Razorpay order response.');
+                }
+                console.log('Using Razorpay key_id:', orderData.key_id);
+                console.log('Using Razorpay order_id:', orderData.order_id);
+
+                status.textContent = 'Order created. Opening payment form...';
+
+                const options = {
+                    key: orderData.key_id,
+                    amount: orderData.amount,
+                    currency: orderData.currency,
+                    name: 'Roji Roti Premium',
+                    description: 'Pro Tier Upgrade',
+                    order_id: orderData.order_id,
+                    handler: async function (response) {
+                        status.textContent = 'Verifying payment...';
+                        try {
+                            const verifyResponse = await fetch(verifyUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    razorpay_order_id: response.razorpay_order_id,
+                                    razorpay_payment_id: response.razorpay_payment_id,
+                                    razorpay_signature: response.razorpay_signature
+                                })
+                            });
+                            const verifyData = await verifyResponse.json();
+                            if (!verifyResponse.ok) {
+                                console.error('verify-payment failed', verifyData);
+                                throw new Error(verifyData.detail || 'Payment verification failed.');
+                            }
+                            status.textContent = 'Payment verified successfully.';
+                        } catch (error) {
+                            console.error('verification error', error);
+                            status.textContent = error.message;
+                        }
+                    },
+                    modal: {
+                        ondismiss: function () {
+                            status.textContent = 'Payment cancelled.';
+                        }
+                    },
+                    prefill: {
+                        name: 'Roji Roti User',
+                        email: 'user@example.com'
+                    }
+                };
+
+                const rzp = new Razorpay(options);
+                rzp.on('payment.failed', function (response) {
+                    try {
+                        console.error('Razorpay payment failed event:', response);
+                        const responseJson = JSON.stringify(response, null, 2);
+                        console.error('Razorpay payment failed JSON:', responseJson);
+                        const reason = response.error && response.error.description ? response.error.description : 'Unknown error';
+                        const code = response.error && response.error.code ? response.error.code : 'unknown_code';
+                        status.textContent = `Payment failed (${code}): ${reason}`;
+                    } catch (err) {
+                        console.error('Error serializing Razorpay failure event', err);
+                        status.textContent = 'Payment failed: unexpected response';
+                    }
+                });
+                rzp.open();
+            } catch (error) {
+                console.error('Checkout error', error);
+                status.textContent = error.message;
+            }
+        });
     </script>
 </body>
 </html>
