@@ -319,6 +319,30 @@ async def get_worker_reviews(worker_id: str):
         "date": r.created_at
     } for r in reviews]
 
+@router.get("/reverse-geocode")
+async def get_address_from_gps(lat: float, lng: float):
+    """
+    Takes GPS coordinates from the user's phone and returns a readable address.
+    Frontend can use this to auto-fill the 'location_name' field during registration.
+    """
+    # Quick validation to ensure coordinates are on Earth
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="Invalid GPS coordinates provided.")
+
+    location_data = await MapService.reverse_geocode(lat, lng)
+    
+    if not location_data:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, 
+            detail="Could not resolve these coordinates to an address right now."
+        )
+
+    return {
+        "status": "success",
+        "formatted_address": location_data["formatted_address"],
+        "city": location_data["city"]
+    }
+
 # --- Job Applications ---
 
 @router.post("/apply/{job_id}", status_code=status.HTTP_201_CREATED)

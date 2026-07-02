@@ -76,3 +76,71 @@ class MapService:
         except Exception as e:
             logger.error(f"❌ Failed to connect to Ola Maps: {str(e)}")
             return None
+        
+    @staticmethod
+    async def reverse_geocode(lat: float, lng: float) -> dict | None:
+        """
+        Converts raw GPS coordinates into a readable address using Ola Maps.
+        Useful for 'Use My Location' buttons on the frontend.
+        """
+        # 1. Debug Bypass for Local Testing
+        if getattr(settings, "DEBUG", False):
+            logger.info(f"📍 [MOCK REVERSE GEOCODE] Converting {lat}, {lng} to address.")
+            return {
+                "formatted_address": "Indore, Madhya Pradesh, India",
+                "city": "Indore"
+            }
+
+        # 2. Fetch Credentials
+        api_key = getattr(settings, "OLA_MAPS_API_KEY", None)
+        if not api_key:
+            logger.error("🚨 Ola Maps API Key is missing.")
+            return None
+
+        # 3. Setup Ola Maps Request
+        url = "https://api.olamaps.io/places/v1/reverse-geocode"
+        params = {
+            "latlng": f"{lat},{lng}",
+            "api_key": api_key
+        }
+        headers = {
+            "accept": "application/json"
+        }
+
+        # 4. Execute Async Request
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params, headers=headers, timeout=10.0)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data.get("status") == "ok" and data.get("results"):
+                        results = data.get("results", [])
+                        best_match = results[0]
+                        
+                        # Try to extract a clean city name from address components if available
+                        city = None
+                        for component in best_match.get("address_components", []):
+                            if "locality" in component.get("types", []):
+                                city = component.get("long_name")
+                                break
+
+                        return {
+                            "formatted_address": best_match.get("formatted_address", "Unknown Location"),
+                            "city": city or "Unknown City"
+                        }
+                    else:
+                        logger.warning(f"⚠️ Ola Maps found no address for coordinates: {lat}, {lng}")
+                        return None
+                        
+                else:
+                    logger.error(f"❌ Ola Maps API Error [{response.status_code}]: {response.text}")
+                    return None
+                    
+        except httpx.TimeoutException:
+            logger.error("❌ Ola Maps API timed out.")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to Ola Maps: {str(e)}")
+            return None
