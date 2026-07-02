@@ -39,6 +39,7 @@ from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
 from app.services.kyc import KYCService
 from app.utils.maps import MapService
+from app.services.recommendation import RecommendationService
 
 router = APIRouter()
 
@@ -226,43 +227,44 @@ async def get_job_feed():
     return active_jobs
 
 @router.get("/recommendations")
-async def get_job_recommendations(
+async def get_smart_job_recommendations(
+    radius_km: int = 15,
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Finds the 10 most recent jobs that match the worker's category and city (case-insensitive).
+    Returns an AI-ranked list of jobs based on Category, Distance, and Experience.
     """
-    # 1. Safely extract the worker's category
-    worker_category = getattr(current_employee, "category", None) or getattr(current_employee, "trade_category", None)
-    
-    if not worker_category:
-        return []
+    # 1. Failsafe: Ensure worker has coordinates
+    if not current_employee.current_location or not current_employee.current_location.coordinates:
+        return {"message": "Please update your location to see nearby job recommendations.", "jobs": []}
 
-    # 2. Build a CASE-INSENSITIVE query for category
-    query = {
-        "category": re.compile(f"^{worker_category}$", re.IGNORECASE),
-        "is_active": True
+    # 2. Call the Engine
+    ranked_jobs_data = await RecommendationService.get_best_jobs_for_worker(
+        worker=current_employee, 
+        max_distance_km=radius_km
+    )
+
+    if not ranked_jobs_data:
+        return {"message": "No perfect matches found nearby. Try expanding your search radius!", "jobs": []}
+
+    # 3. Format for the frontend
+    formatted_jobs = []
+    for job in ranked_jobs_data:
+        formatted_jobs.append({
+            "job_id": str(job["_id"]),
+            "title": job.get("title", "Job Posting"),
+            "category": job.get("category"),
+            "location_name": job.get("location_name"),
+            "distance_km": round(job.get("distance_km", 0), 1), # Rounded to 1 decimal
+            "salary": job.get("salary_range", job.get("salary", "Not specified")),
+            "match_score": job.get("match_score") # Out of 100!
+        })
+
+    return {
+        "status": "success",
+        "total_matches": len(formatted_jobs),
+        "jobs": formatted_jobs
     }
-    
-    # 3. Bulletproof Location Match (Checks all possible field names)
-    location_name = getattr(current_employee, "location_name", None)
-    if location_name:
-        query["$or"] = [
-            {"location": {"$regex": location_name, "$options": "i"}},
-            {"locations": {"$regex": location_name, "$options": "i"}},
-            {"location_name": {"$regex": location_name, "$options": "i"}}
-        ]
-
-    # 4. Execute the search with sort and limit
-    jobs = await Job.find(query).sort("-created_at").limit(10).to_list()
-
-    # 5. Format the output safely
-    return [{
-        "job_id": str(j.id),
-        "title": getattr(j, "title", "Job Posting"),
-        "salary": getattr(j, "salary_range", getattr(j, "salary", "Not specified")), 
-        "posted_at": getattr(j, "created_at", None)
-    } for j in jobs]
 
 @router.get("/nearby-jobs")
 async def get_nearby_jobs(

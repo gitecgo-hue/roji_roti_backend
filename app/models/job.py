@@ -19,7 +19,7 @@ class Job(Document):
     
     # Required for the Geospatial "$near" search to work!
     # Made Optional because Pan-India jobs might not have a specific GPS coordinate
-    current_location: Optional[GeoLocation] = None
+    current_location: GeoLocation
     
     # --- Compensation & Requirements ---
     salary_range: Optional[str] = None
