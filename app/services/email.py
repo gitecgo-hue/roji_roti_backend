@@ -14,7 +14,7 @@ class EmailService:
         # 1. Debug Bypass (Prints to terminal instead of sending real email)
         if getattr(settings, "DEBUG", False):
             logger.info("========================================")
-            logger.info(f"📧 MOCK EMAIL SENT TO: {to_email}")
+            logger.info(f"MOCK EMAIL SENT TO: {to_email}")
             logger.info(f"Subject: {subject}")
             logger.info(f"Content: {html_content}")
             logger.info("========================================")
