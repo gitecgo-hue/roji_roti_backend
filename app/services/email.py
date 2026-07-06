@@ -6,30 +6,33 @@ logger = logging.getLogger(__name__)
 
 class EmailService:
     @staticmethod
-    async def send_email(to_email: str, subject: str, html_content: str) -> bool:
+    async def send_email(to_email: str, subject: str, html_content: str, to_name: str = "") -> bool:
         """
-        Base method to send any HTML email via Brevo's REST API.
+        Sends a transactional email using the Brevo REST API.
         Includes a DEBUG bypass so you don't waste API credits while testing locally.
         """
-        # 1. Debug Bypass (Prints to terminal instead of sending real email)
+        if not to_email:
+            logger.warning("No recipient email provided. Skipping email send.")
+            return False
+
+        # 1. Debug Bypass for Local Testing
         if getattr(settings, "DEBUG", False):
             logger.info("========================================")
-            logger.info(f"MOCK EMAIL SENT TO: {to_email}")
-            logger.info(f"Subject: {subject}")
+            logger.info(f"📧 [MOCK EMAIL] To: {to_email} | Subject: {subject}")
             logger.info(f"Content: {html_content}")
             logger.info("========================================")
             return True
 
         # 2. Fetch Credentials
         api_key = getattr(settings, "BREVO_API_KEY", None)
-        sender_email = getattr(settings, "BREVO_SENDER_EMAIL", "support@rojiroti.com")
-        sender_name = getattr(settings, "BREVO_SENDER_NAME", "Roji Roti")
+        sender_email = getattr(settings, "BREVO_SENDER_EMAIL", "no-reply@rojiroti.com")
+        sender_name = getattr(settings, "BREVO_SENDER_NAME", "Roji Roti Team")
 
         if not api_key:
-            logger.error("Brevo API Key is missing from environment variables.")
+            logger.error("🚨 Brevo API Key is missing from environment variables.")
             return False
 
-        # 3. Setup Brevo Request
+        # 3. Setup Brevo Request Payload
         url = "https://api.brevo.com/v3/smtp/email"
         headers = {
             "accept": "application/json",
@@ -39,7 +42,7 @@ class EmailService:
         
         payload = {
             "sender": {"name": sender_name, "email": sender_email},
-            "to": [{"email": to_email}],
+            "to": [{"email": to_email, "name": to_name}],
             "subject": subject,
             "htmlContent": html_content
         }
@@ -47,17 +50,22 @@ class EmailService:
         # 4. Execute Async Request
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, headers=headers, json=payload)
+                # 15-second timeout in case Brevo's servers are slow
+                response = await client.post(url, headers=headers, json=payload, timeout=15.0)
                 
-                # Brevo returns 201 Created on success
+                # Brevo returns 201 Created or 202 Accepted on success
                 if response.status_code in (200, 201, 202):
-                    logger.info(f"✅ Email successfully sent to {to_email}")
+                    logger.info(f"✅ Email sent successfully to {to_email}")
                     return True
                 else:
-                    logger.error(f"❌ Brevo API Error: {response.text}")
+                    logger.error(f"❌ Brevo API Error [{response.status_code}]: {response.text}")
                     return False
+                    
+        except httpx.TimeoutException:
+            logger.error("❌ Brevo API timed out.")
+            return False
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Brevo API: {str(e)}")
+            logger.error(f"❌ Failed to send email: {str(e)}")
             return False
 
     # =================================================================
@@ -89,9 +97,19 @@ class EmailService:
         return await EmailService.send_email(to_email, subject, html_content)
         
     @staticmethod
-    async def send_welcome_email(to_email: str, name: str) -> bool:
-        """Example: A welcome email to send after successful registration."""
-        subject = "Welcome to the Roji Roti Family!"
-        html_content = f"<h3>Hi {name},</h3><p>We are thrilled to have you on board. Let's find you the best opportunities!</p>"
+    async def send_welcome_email(to_email: str, user_name: str) -> bool:
+        """Pre-configured template for welcoming new users."""
+        subject = "Welcome to Roji Roti! 🎉"
+        html_content = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; color: #333;">
+                <h2>Welcome aboard, {user_name}!</h2>
+                <p>We are thrilled to have you join <b>Roji Roti</b>.</p>
+                <p>Your profile is now active. You can start exploring top jobs and connecting with employers immediately.</p>
+                <br>
+                <p>Best regards,<br>The Roji Roti Team</p>
+            </body>
+        </html>
+        """
         
-        return await EmailService.send_email(to_email, subject, html_content)
+        return await EmailService.send_email(to_email, subject, html_content, user_name)

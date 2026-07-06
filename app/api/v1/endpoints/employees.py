@@ -33,6 +33,7 @@ from app.models.auth import OTP
 from app.models.category import Category # Added to support the /categories endpoint
 
 # --- Services ---
+from app.services.email import EmailService
 from app.services.webhooks import WebhookService 
 from app.utils.storage import StorageService
 from app.services.resumes import ResumeService
