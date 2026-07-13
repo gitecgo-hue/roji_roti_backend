@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 from bson import ObjectId
@@ -9,8 +9,7 @@ from beanie import PydanticObjectId
 
 # --- Core & Settings ---
 from app.core.config import settings
-from app.core.security import verify_password
-from app.core.security import create_access_token
+from app.core.security import verify_password, create_access_token, get_password_hash
 from app.api.dependencies import get_current_employer
 
 # --- Model & Service Imports ---
@@ -25,6 +24,8 @@ from app.models.auth import OTP
 from app.models.application import JobApplication, ApplicationStatus
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
+from app.services.email import EmailService
+from app.utils.maps import MapService
 from app.schemas.employer import EmployerDashboardResponse
 
 router = APIRouter()
@@ -35,12 +36,23 @@ router = APIRouter()
 
 class EmployerRegistrationRequest(BaseModel):
     access_token: str = Field(..., description="Token received from unified /login endpoint")
-    company_name: str
-    name: str
-    email: Optional[EmailStr] = None
+    phone: str = Field(..., description="The mobile number being registered")
+    owner_name: str = Field(..., description="The personal name of the employer")
+    company_name: str = Field(..., description="The name of the business")
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    company_address: str
     industry: Optional[str] = None
     company_size: Optional[str] = None
-    # Add any extra fields you want (e.g., location, gst_number) based on your needs
+    gstin: str | None = None
+
+class EmployerResponse(BaseModel):
+    id: str
+    owner_name: str
+    company_name: str
+    email: str
+    phone: str
+    is_verified: bool
 
 class RateWorkerRequest(BaseModel):
     rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1 and 5")
@@ -58,84 +70,114 @@ class UpdatePhoneRequest(BaseModel):
 # REGISTRATION & DASHBOARD 
 # =====================================================================
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register_employer(data: EmployerRegistrationRequest):
+@router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
+async def register_employer(data: EmployerRegistrationRequest, background_tasks: BackgroundTasks):
     """
-    Register a new Employer securely using a verified OTP token.
+    Registers a new Employer securely, geocodes their address, and initializes a free subscription tier.
     """
-    # 1. Securely decode the token to get the verified phone number
+    # 1. Verify the Registration Session Token
     try:
         payload = jwt.decode(
             data.access_token, 
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "access_token":
+        if payload.get("user_type") not in ["registration_token", "access_token"]:
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")
     except Exception:
         raise HTTPException(
-            status_code=401, 
-            detail="Invalid or expired registration session. Please verify your OTP again."
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired registration session."
         )
 
-    # 2. Double-check they don't already exist
-    existing_employer = await Employer.find_one(Employer.phone == verified_phone)
+    # --- SECURITY CHECK ---
+    if verified_phone != data.phone:
+        raise HTTPException(
+            status_code=400, 
+            detail="The phone number provided does not match the verified OTP token."
+        )
+
+    # 2. Check for existing accounts
+    existing_employer = await Employer.find_one({"$or": [{"phone": data.phone}, {"email": data.email}]})
     if existing_employer:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An employer account with this phone number already exists."
+            detail="An account with this phone number or email already exists."
         )
 
-    # 3. Create the Employer in MongoDB (Password removed for Passwordless Auth)
+    # 3. Geocode the Company Address using Ola Maps
+    coords = await MapService.get_coordinates(data.company_address)
+    formatted_address = data.company_address
+    location_geo = None
+
+    if coords:
+        formatted_address = coords["formatted_address"]
+        location_geo = {
+            "type": "Point",
+            "coordinates": [coords["longitude"], coords["latitude"]]
+        }
+
+    # 4. Hash Password & Create Employer
+    hashed_password = get_password_hash(data.password)
+    
     new_employer = Employer(
-        phone=verified_phone, # <--- Inserted securely from the token!
+        phone=data.phone,
+        name=data.owner_name,
         company_name=data.company_name,
-        name=data.name,
         email=data.email,
+        hashed_password=hashed_password,
+        address=formatted_address,
+        location=location_geo,
+        gstin=data.gstin,
         industry=data.industry,
         company_size=data.company_size,
-        is_active=True, # Employers are active right after mobile verification
+        is_active=True, 
+        is_verified=False,
         employer_type=EmployerType.COMPANY, 
         subscription_tier=SubscriptionTier.FREE 
     )
-    
     await new_employer.insert()
 
-    # Create a free tier subscription right away
-    base_sub = Subscription(
-        employer_id=str(new_employer.id),
-        plan_type="free",
-        is_active=True,
-        start_date=datetime.utcnow(),
-        expiry_date=datetime.utcnow() + timedelta(days=30),
-        contacts_checked=0,
-        resumes_downloaded=0,
-        jobs_posted=0,
-        india_level_jobs_posted=0
-    )
-    await base_sub.insert()
+    # 5. Initialize Free Tier Subscription & Email (Background Task)
+    async def setup_new_employer(emp_id: str, email: str, name: str):
+        # Create a free tier record so they can start immediately
+        base_sub = Subscription(
+            employer_id=emp_id,
+            plan_type="free",
+            is_active=True,
+            start_date=datetime.utcnow(),
+            expiry_date=datetime.utcnow() + timedelta(days=30),
+            contacts_checked=0,
+            resumes_downloaded=0,
+            jobs_posted=0,
+            india_level_jobs_posted=0
+        )
+        await base_sub.insert()
+        
+        if email:
+            await EmailService.send_welcome_email(to_email=email, user_name=name)
 
-    # 4. Automatically log them in by generating a real access token
-    access_token = create_access_token(
-        subject=str(new_employer.id), 
-        user_type="employer"
-    )
-    
+    background_tasks.add_task(setup_new_employer, str(new_employer.id), new_employer.email, new_employer.name)
+
+    # 6. Generate Login Token
+    access_token = create_access_token(subject=str(new_employer.id), user_type="employer")
+
     return {
         "status": "success",
-        "message": "Employer registered successfully!",
+        "message": "Employer account created successfully.",
         "access_token": access_token,
         "token_type": "bearer",
-        "employer_details": {
-            "id": str(new_employer.id),
-            "company_name": new_employer.company_name,
-            "name": new_employer.name,
-            "phone": new_employer.phone
-        }
+        "employer": EmployerResponse(
+            id=str(new_employer.id),
+            owner_name=new_employer.name,
+            company_name=new_employer.company_name,
+            email=new_employer.email,
+            phone=new_employer.phone,
+            is_verified=new_employer.is_verified
+        )
     }
-
 
 @router.get("/dashboard", response_model=EmployerDashboardResponse)
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
@@ -185,7 +227,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
 
 @router.get("/my-jobs", response_model=List[Job]) 
 async def list_employer_jobs(current_employer: Employer = Depends(get_current_employer)):
-    """Aman sees every job he has ever posted."""
+    """Sees every job the employer has ever posted."""
     jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     return jobs
 
@@ -274,7 +316,7 @@ async def update_application_status(
         await job.save()
         job_closed = True
 
-        # Send Notification to the Worker (Raju)
+        # Send Notification to the Worker
         new_notif = Notification(
             user_id=app_record.employee_id,
             title="Hired!",

@@ -54,6 +54,7 @@ class LocationInput(BaseModel):
 
 class EmployeeRegistrationRequest(BaseModel):
     access_token: str = Field(..., description="Token received from /verify-signup-otp")
+    phone: str = Field(..., description="The mobile number being registered")
     name: str
     category: str
     location_name: str
@@ -84,7 +85,6 @@ class UpdatePhoneRequest(BaseModel):
 async def register_employee(data: EmployeeRegistrationRequest):
     """
     Register a new blue-collar worker profile securely using a verified OTP token.
-    Auto-Geocodes the location using Ola Maps if coordinates are not provided.
     """
     # 1. Verify the Registration Session Token
     try:
@@ -93,7 +93,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "access_token":
+        if payload.get("user_type") != "registration_token":
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")
@@ -103,8 +103,16 @@ async def register_employee(data: EmployeeRegistrationRequest):
             detail="Invalid or expired registration session. Please verify your OTP again."
         )
 
+    # --- NEW SECURITY CHECK ---
+    if verified_phone != data.phone:
+        raise HTTPException(
+            status_code=400, 
+            detail="The phone number provided does not match the verified OTP token."
+        )
+    # --------------------------
+
     # 2. Check if phone already exists
-    existing_employee = await Employee.find_one(Employee.phone == verified_phone)
+    existing_employee = await Employee.find_one(Employee.phone == data.phone)
     if existing_employee:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
