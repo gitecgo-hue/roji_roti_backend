@@ -30,7 +30,7 @@ from app.models.payment import Payment
 from app.models.review import Review 
 from app.models.notification import Notification
 from app.models.auth import OTP 
-from app.models.category import Category # Added to support the /categories endpoint
+from app.models.category import Category
 
 # --- Services ---
 from app.services.email import EmailService
@@ -53,8 +53,8 @@ class LocationInput(BaseModel):
     longitude: float
 
 class EmployeeRegistrationRequest(BaseModel):
-    access_token: str = Field(..., description="Token received from /verify-signup-otp")
     phone: str = Field(..., description="The mobile number being registered")
+    otp_code: str = Field(..., description="The 4-digit OTP sent to the phone")
     name: str
     category: str
     location_name: str
@@ -84,43 +84,36 @@ class UpdatePhoneRequest(BaseModel):
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_employee(data: EmployeeRegistrationRequest):
     """
-    Register a new blue-collar worker profile securely using a verified OTP token.
+    Register a new blue-collar worker profile.
+    Verifies the OTP directly in this endpoint without needing a temporary token.
     """
-    # 1. Verify the Registration Session Token
-    try:
-        payload = jwt.decode(
-            data.access_token, 
-            settings.SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
-        )
-        if payload.get("user_type") != "registration_token":
-            raise ValueError("Invalid token type")
-            
-        verified_phone = payload.get("sub")
-    except Exception:
-        raise HTTPException(
-            status_code=401, 
-            detail="Invalid or expired registration session. Please verify your OTP again."
-        )
+    clean_phone = data.phone[-10:]
 
-    # --- NEW SECURITY CHECK ---
-    if verified_phone != data.phone:
+    # =================================================================
+    # 1. DIRECT OTP VERIFICATION 
+    # =================================================================
+    otp_record = await OTP.find_one({"phone": clean_phone})
+    
+    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
         raise HTTPException(
-            status_code=400, 
-            detail="The phone number provided does not match the verified OTP token."
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired OTP. Please request a new one."
         )
-    # --------------------------
 
     # 2. Check if phone already exists
-    existing_employee = await Employee.find_one(Employee.phone == data.phone)
+    existing_employee = await Employee.find_one(Employee.phone == clean_phone)
     if existing_employee:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this phone number already exists."
         )
 
+    # 3. Consume the OTP so it cannot be reused
+    otp_record.hashed_code = None
+    await otp_record.save()
+
     # =================================================================
-    # 3. OLA MAPS MAGIC: Auto-Geocode the typed location
+    # 4. OLA MAPS MAGIC: Auto-Geocode the typed location
     # =================================================================
     if data.location_name and not data.location:
         coords = await MapService.get_coordinates(data.location_name)
@@ -141,14 +134,14 @@ async def register_employee(data: EmployeeRegistrationRequest):
     elif not data.location and not data.location_name:
         raise HTTPException(status_code=400, detail="A location name must be provided.")
 
-    # 4. Save to Database
+    # 5. Save to Database
     geo_location = GeoLocation(
         type="Point",
         coordinates=[data.location.longitude, data.location.latitude]
     )
     
     new_employee = Employee(
-        phone=verified_phone,
+        phone=clean_phone,
         full_name=data.name,              
         trade_category=data.category,     
         location=f"{data.location.latitude}, {data.location.longitude}",        
@@ -168,7 +161,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
     
     await new_employee.insert()
 
-    # 5. Trigger Webhook & Generate Login Token
+    # 6. Trigger Webhook 
     await WebhookService.trigger_event("worker_registered", {
         "worker_id": str(new_employee.id),
         "name": new_employee.name,
@@ -176,6 +169,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
         "location": new_employee.location_name
     })
     
+    # 7. Generate the Final Access Token
     access_token = create_access_token(
         subject=str(new_employee.id), 
         user_type="employee"
@@ -183,7 +177,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
     
     return {
         "status": "success",
-        "message": "User registered successfully with verified coordinates!",
+        "message": "User registered successfully!",
         "access_token": access_token,
         "token_type": "bearer",
         "employee": EmployeeResponse(

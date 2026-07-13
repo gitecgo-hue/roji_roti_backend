@@ -35,8 +35,8 @@ router = APIRouter()
 # =====================================================================
 
 class EmployerRegistrationRequest(BaseModel):
-    access_token: str = Field(..., description="Token received from unified /login endpoint")
     phone: str = Field(..., description="The mobile number being registered")
+    otp_code: str = Field(..., description="The 4-digit OTP sent to the phone") # Replaced access_token!
     owner_name: str = Field(..., description="The personal name of the employer")
     company_name: str = Field(..., description="The name of the business")
     email: EmailStr
@@ -73,41 +73,34 @@ class UpdatePhoneRequest(BaseModel):
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register_employer(data: EmployerRegistrationRequest, background_tasks: BackgroundTasks):
     """
-    Registers a new Employer securely, geocodes their address, and initializes a free subscription tier.
+    Registers a new Employer securely, verifying the OTP directly.
     """
-    # 1. Verify the Registration Session Token
-    try:
-        payload = jwt.decode(
-            data.access_token, 
-            settings.SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
-        )
-        if payload.get("user_type") not in ["registration_token", "access_token"]:
-            raise ValueError("Invalid token type")
-            
-        verified_phone = payload.get("sub")
-    except Exception:
+    clean_phone = data.phone[-10:]
+
+    # =================================================================
+    # 1. DIRECT OTP VERIFICATION 
+    # =================================================================
+    otp_record = await OTP.find_one({"phone": clean_phone})
+    
+    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Invalid or expired registration session."
-        )
-
-    # --- SECURITY CHECK ---
-    if verified_phone != data.phone:
-        raise HTTPException(
-            status_code=400, 
-            detail="The phone number provided does not match the verified OTP token."
+            detail="Invalid or expired OTP. Please request a new one."
         )
 
     # 2. Check for existing accounts
-    existing_employer = await Employer.find_one({"$or": [{"phone": data.phone}, {"email": data.email}]})
+    existing_employer = await Employer.find_one({"$or": [{"phone": clean_phone}, {"email": data.email}]})
     if existing_employer:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this phone number or email already exists."
         )
 
-    # 3. Geocode the Company Address using Ola Maps
+    # 3. Consume the OTP
+    otp_record.hashed_code = None
+    await otp_record.save()
+
+    # 4. Geocode Address via Ola Maps
     coords = await MapService.get_coordinates(data.company_address)
     formatted_address = data.company_address
     location_geo = None
@@ -119,11 +112,11 @@ async def register_employer(data: EmployerRegistrationRequest, background_tasks:
             "coordinates": [coords["longitude"], coords["latitude"]]
         }
 
-    # 4. Hash Password & Create Employer
+    # 5. Hash Password & Create Employer
     hashed_password = get_password_hash(data.password)
     
     new_employer = Employer(
-        phone=data.phone,
+        phone=clean_phone,
         name=data.owner_name,
         company_name=data.company_name,
         email=data.email,
@@ -140,9 +133,8 @@ async def register_employer(data: EmployerRegistrationRequest, background_tasks:
     )
     await new_employer.insert()
 
-    # 5. Initialize Free Tier Subscription & Email (Background Task)
+    # 6. Initialize Free Tier Subscription (Background Task)
     async def setup_new_employer(emp_id: str, email: str, name: str):
-        # Create a free tier record so they can start immediately
         base_sub = Subscription(
             employer_id=emp_id,
             plan_type="free",
@@ -155,13 +147,12 @@ async def register_employer(data: EmployerRegistrationRequest, background_tasks:
             india_level_jobs_posted=0
         )
         await base_sub.insert()
-        
         if email:
             await EmailService.send_welcome_email(to_email=email, user_name=name)
 
     background_tasks.add_task(setup_new_employer, str(new_employer.id), new_employer.email, new_employer.name)
 
-    # 6. Generate Login Token
+    # 7. Generate the Final Access Token
     access_token = create_access_token(subject=str(new_employer.id), user_type="employer")
 
     return {
