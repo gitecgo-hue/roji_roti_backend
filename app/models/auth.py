@@ -11,6 +11,7 @@ class OTP(Document):
     hashed_code: Optional[str] = None  
     
     user_type: str # "employee", "employer", or "admin"
+    name: Optional[str] = None
     
     # --- Abuse Prevention Fields ---
     daily_count: int = 0

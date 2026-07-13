@@ -28,7 +28,7 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # ==============================================================================
-# --- PYDANTIC SCHEMAS (Notice: is_signup flag is completely gone!) ---
+# --- PYDANTIC SCHEMAS ---
 # ==============================================================================
 
 class AdminOTPRequest(BaseModel):
@@ -40,6 +40,11 @@ class AdminLoginRequest(BaseModel):
 
 class PublicOTPRequest(BaseModel):
     identifier: str
+    app_role: str = Field(..., description="Must be 'employer' or 'employee'")
+
+class RequestSignupOTP(BaseModel):
+    identifier: str = Field(..., description="Mobile number for registration")
+    name: str = Field(..., description="The user's full name")
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
 
 class PublicVerifyRequest(BaseModel):
@@ -93,7 +98,7 @@ async def verify_and_consume_otp(identifier: str, otp_code: str, is_email_auth: 
         otp_record.hashed_code = None
         await otp_record.save()
 
-async def generate_and_send_otp(identifier: str, app_role: str, user=None):
+async def generate_and_send_otp(identifier: str, app_role: str, user=None, name: str = None):
     """Helper to generate and send OTP via SMS/Email and track Webhook Session"""
     now = datetime.utcnow()
     otp_code = ''.join(random.choices(string.digits, k=4))
@@ -125,9 +130,18 @@ async def generate_and_send_otp(identifier: str, app_role: str, user=None):
             otp_record.user_type = app_role
             otp_record.daily_count += 1
             otp_record.last_request_date = now
+            if name: 
+                otp_record.name = name  # Update the temp name if they retry
             await otp_record.save()
         else:
-            new_otp = OTP(phone=clean_phone, hashed_code=hashed_otp, user_type=app_role, daily_count=1, last_request_date=now)
+            new_otp = OTP(
+                phone=clean_phone, 
+                hashed_code=hashed_otp, 
+                user_type=app_role, 
+                daily_count=1, 
+                last_request_date=now,
+                name=name # Save the name during registration request
+            )
             await new_otp.insert()
             otp_record = await OTP.find_one({"phone": clean_phone})
         
@@ -210,8 +224,8 @@ async def login_verify(data: PublicVerifyRequest, request: Request):
 
 @router.post("/register/request-otp")
 @limiter.limit("3/minute")
-async def request_signup_otp(data: PublicOTPRequest, request: Request):
-    """Requests an OTP for Sign-Up. BLOCKS ALREADY REGISTERED NUMBERS."""
+async def request_signup_otp(data: RequestSignupOTP, request: Request):
+    """Requests an OTP for Sign-Up. BLOCKS ALREADY REGISTERED NUMBERS and saves the Name temporarily."""
     app_role = data.app_role.lower()
     user = await get_user_by_identifier(data.identifier)
 
@@ -219,8 +233,10 @@ async def request_signup_otp(data: PublicOTPRequest, request: Request):
     if user:
         raise HTTPException(status_code=409, detail="This number is already registered. Please go to Login.")
 
-    dest_type = await generate_and_send_otp(data.identifier, app_role, user=None)
-    return {"message": f"OTP sent to your {dest_type}."}
+    # Pass the name into the helper so it gets saved in the OTP database
+    dest_type = await generate_and_send_otp(data.identifier, app_role, user=None, name=data.name)
+    
+    return {"message": f"OTP sent to your {dest_type}. Phone number available for registration."}
 
 
 @router.post("/register/verify-otp", response_model=dict)
