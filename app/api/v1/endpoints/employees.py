@@ -6,11 +6,10 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response
 from fastapi.responses import StreamingResponse
 from bson import ObjectId
-from jose import jwt
 
 # --- Core & Dependencies ---
 from app.core.config import settings
-from app.core.security import create_access_token, verify_password
+from app.core.security import verify_password
 from app.api.dependencies import get_current_employee, get_current_employer
 
 # --- Schemas ---
@@ -45,23 +44,17 @@ from app.services.recommendation import RecommendationService
 router = APIRouter()
 
 # =====================================================================
-# PYDANTIC SCHEMAS FOR REGISTRATION & PROFILE UPDATES
+# PYDANTIC SCHEMAS FOR PROFILE COMPLETION & UPDATES
 # =====================================================================
 
 class LocationInput(BaseModel):
     latitude: float
     longitude: float
 
-class EmployeeRegistrationRequest(BaseModel):
-    phone: str = Field(..., description="The mobile number being registered")
-    otp_code: str = Field(..., description="The 4-digit OTP sent to the phone")
-    name: str
+class CompleteEmployeeProfileRequest(BaseModel):
     category: str
     location_name: str
-    
-    # --- MADE OPTIONAL FOR OLA MAPS AUTO-FILL ---
     location: Optional[LocationInput] = Field(default=None, description="Backend will auto-fill this using Ola Maps")
-    
     preferred_locations: List[str] = []
     experience: int = 0
     languages: List[str] = []
@@ -79,52 +72,28 @@ class UpdatePhoneRequest(BaseModel):
 # EMPLOYEE ACTIONS
 # =====================================================================
 
-# --- Registration & Auth ---
+# --- Profile Completion ---
 
-@router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
-async def register_employee(data: EmployeeRegistrationRequest):
+@router.patch("/profile/complete", response_model=dict, status_code=status.HTTP_200_OK)
+async def complete_employee_profile(
+    data: CompleteEmployeeProfileRequest,
+    current_worker: Employee = Depends(get_current_employee)
+):
     """
-    Register a new blue-collar worker profile.
-    Verifies the OTP directly in this endpoint without needing a temporary token.
+    Completes the employee's profile after they have verified their phone number.
+    Requires the access_token received from the Auth endpoint.
     """
-    clean_phone = data.phone[-10:]
-
     # =================================================================
-    # 1. DIRECT OTP VERIFICATION 
-    # =================================================================
-    otp_record = await OTP.find_one({"phone": clean_phone})
-    
-    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Invalid or expired OTP. Please request a new one."
-        )
-
-    # 2. Check if phone already exists
-    existing_employee = await Employee.find_one(Employee.phone == clean_phone)
-    if existing_employee:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this phone number already exists."
-        )
-
-    # 3. Consume the OTP so it cannot be reused
-    otp_record.hashed_code = None
-    await otp_record.save()
-
-    # =================================================================
-    # 4. OLA MAPS MAGIC: Auto-Geocode the typed location
+    # 1. OLA MAPS MAGIC: Auto-Geocode the typed location
     # =================================================================
     if data.location_name and not data.location:
         coords = await MapService.get_coordinates(data.location_name)
         
         if coords:
-            # Overwrite with the exact data from Ola Maps
             data.location = LocationInput(
                 latitude=coords["latitude"],
                 longitude=coords["longitude"]
             )
-            # Clean up the user's messy typing with Ola's official address
             data.location_name = coords["formatted_address"]
         else:
             raise HTTPException(
@@ -134,60 +103,47 @@ async def register_employee(data: EmployeeRegistrationRequest):
     elif not data.location and not data.location_name:
         raise HTTPException(status_code=400, detail="A location name must be provided.")
 
-    # 5. Save to Database
+    # 2. Update Database Record
     geo_location = GeoLocation(
         type="Point",
         coordinates=[data.location.longitude, data.location.latitude]
     )
     
-    new_employee = Employee(
-        phone=clean_phone,
-        full_name=data.name,              
-        trade_category=data.category,     
-        location=f"{data.location.latitude}, {data.location.longitude}",        
-        experience_years=data.experience, 
-        name=data.name,
-        category=data.category,
-        location_name=data.location_name,
-        current_location=geo_location,
-        preferred_locations=data.preferred_locations,
-        experience=data.experience,
-        languages=data.languages,
-        expected_salary=data.expected_salary,
-        gender=data.gender,
-        email=data.email,
-        referred_by_id=data.referred_by_id
-    )
+    current_worker.trade_category = data.category
+    current_worker.category = data.category
+    current_worker.location = f"{data.location.latitude}, {data.location.longitude}"
+    current_worker.location_name = data.location_name
+    current_worker.current_location = geo_location
+    current_worker.experience_years = data.experience
+    current_worker.experience = data.experience
+    current_worker.preferred_locations = data.preferred_locations
+    current_worker.languages = data.languages
+    current_worker.expected_salary = data.expected_salary
+    current_worker.gender = data.gender
+    current_worker.email = data.email
+    current_worker.referred_by_id = data.referred_by_id
     
-    await new_employee.insert()
+    await current_worker.save()
 
-    # 6. Trigger Webhook 
+    # 3. Trigger Webhook 
     await WebhookService.trigger_event("worker_registered", {
-        "worker_id": str(new_employee.id),
-        "name": new_employee.name,
-        "category": new_employee.category,
-        "location": new_employee.location_name
+        "worker_id": str(current_worker.id),
+        "name": current_worker.name,
+        "category": current_worker.category,
+        "location": current_worker.location_name
     })
-    
-    # 7. Generate the Final Access Token
-    access_token = create_access_token(
-        subject=str(new_employee.id), 
-        user_type="employee"
-    )
     
     return {
         "status": "success",
-        "message": "User registered successfully!",
-        "access_token": access_token,
-        "token_type": "bearer",
+        "message": "Profile completed successfully!",
         "employee": EmployeeResponse(
-            id=str(new_employee.id),
-            phone=new_employee.phone,
-            name=new_employee.name,
-            category=new_employee.category,
-            availability_status=new_employee.availability_status,
-            rating=new_employee.rating,
-            created_at=new_employee.created_at
+            id=str(current_worker.id),
+            phone=current_worker.phone,
+            name=current_worker.name,
+            category=current_worker.category,
+            availability_status=current_worker.availability_status,
+            rating=current_worker.rating,
+            created_at=current_worker.created_at
         )
     }
 
@@ -237,11 +193,9 @@ async def get_smart_job_recommendations(
     """
     Returns an AI-ranked list of jobs based on Category, Distance, and Experience.
     """
-    # 1. Failsafe: Ensure worker has coordinates
     if not current_employee.current_location or not current_employee.current_location.coordinates:
         return {"message": "Please update your location to see nearby job recommendations.", "jobs": []}
 
-    # 2. Call the Engine
     ranked_jobs_data = await RecommendationService.get_best_jobs_for_worker(
         worker=current_employee, 
         max_distance_km=radius_km
@@ -250,7 +204,6 @@ async def get_smart_job_recommendations(
     if not ranked_jobs_data:
         return {"message": "No perfect matches found nearby. Try expanding your search radius!", "jobs": []}
 
-    # 3. Format for the frontend
     formatted_jobs = []
     for job in ranked_jobs_data:
         formatted_jobs.append({
@@ -258,9 +211,9 @@ async def get_smart_job_recommendations(
             "title": job.get("title", "Job Posting"),
             "category": job.get("category"),
             "location_name": job.get("location_name"),
-            "distance_km": round(job.get("distance_km", 0), 1), # Rounded to 1 decimal
+            "distance_km": round(job.get("distance_km", 0), 1),
             "salary": job.get("salary_range", job.get("salary", "Not specified")),
-            "match_score": job.get("match_score") # Out of 100!
+            "match_score": job.get("match_score")
         })
 
     return {
@@ -326,9 +279,7 @@ async def get_worker_reviews(worker_id: str):
 async def get_address_from_gps(lat: float, lng: float):
     """
     Takes GPS coordinates from the user's phone and returns a readable address.
-    Frontend can use this to auto-fill the 'location_name' field during registration.
     """
-    # Quick validation to ensure coordinates are on Earth
     if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
         raise HTTPException(status_code=400, detail="Invalid GPS coordinates provided.")
 
@@ -364,7 +315,6 @@ async def apply_for_job(
     if not job or not job.is_active:
         raise HTTPException(status_code=404, detail="Job not found or inactive.")
 
-    # Prevent Duplicate Applications
     existing_application = await JobApplication.find_one({
         "employee_id": current_worker.id,
         "job_id": job.id
@@ -372,17 +322,14 @@ async def apply_for_job(
     if existing_application:
         raise HTTPException(status_code=400, detail="You have already applied for this job.")
 
-    # Create Application using the new standardized JobApplication model
     new_app = JobApplication(
         job_id=job.id,
         employee_id=current_worker.id,
         employer_id=job.employer_id, 
         status=ApplicationStatus.APPLIED
     )
-
     await new_app.insert() 
 
-    # Trigger Internal Notification for Employer
     new_notif = Notification(
         user_id=job.employer_id,
         title="New Applicant!",
@@ -417,7 +364,6 @@ async def update_employee_phone(
             detail="This is already your current phone number."
         )
 
-    # Cross-platform checking to prevent duplication conflicts
     phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
                   await Employee.find_one({"phone": clean_new_phone})
     
@@ -427,7 +373,6 @@ async def update_employee_phone(
             detail="This phone number is already registered to another account."
         )
 
-    # Verify OTP against tracker
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
         raise HTTPException(
@@ -435,7 +380,6 @@ async def update_employee_phone(
             detail="Invalid or expired OTP for the new phone number."
         )
 
-    # Consume token but retain rate tracking records
     otp_record.hashed_code = None
     await otp_record.save()
 
@@ -457,7 +401,6 @@ async def verify_worker_kyc(
     """
     Hybrid KYC Verification: Attempts OCR first. If it fails 3 times, routes to manual Admin review.
     """
-    # 1. State Checks
     if current_worker.kyc_status == "VERIFIED" or getattr(current_worker, "is_approved", False):
         return {"status": "success", "message": "Your account is already verified!"}
         
@@ -467,13 +410,11 @@ async def verify_worker_kyc(
             "message": "Your document is currently in the queue for manual review. Please check back later."
         }
 
-    # 2. Validate file type
     if document_image.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
         raise HTTPException(status_code=400, detail="Only JPG and PNG images are supported.")
 
     file_bytes = await document_image.read()
     
-    # 3. Call the external KYC Provider
     try:
         verification_result = await KYCService.verify_id_document(file_bytes, id_type)
     except Exception as e:
@@ -482,27 +423,17 @@ async def verify_worker_kyc(
             detail="KYC Provider is currently unavailable. Please try again later."
         )
 
-    # =====================================================================
-    # 4. THE HYBRID FALLBACK LOGIC
-    # =====================================================================
     if verification_result["status"] != "VERIFIED":
-        # Increment their failure counter
         current_worker.kyc_attempts += 1
         
         if current_worker.kyc_attempts >= 3:
-            # THE FALLBACK: They failed 3 times. Route to a human.
             current_worker.kyc_status = "PENDING_REVIEW"
-            
-            # TODO: Upload the 'file_bytes' to AWS S3/Cloudinary here 
-            # current_worker.kyc_document_url = await StorageService.upload_kyc_doc(file_bytes)
-            
             await current_worker.save()
             return {
                 "status": "manual_review",
                 "message": "Automated verification failed. We have sent your document to our team for a manual review within 24 hours."
             }
         else:
-            # THE STRICT GATE: Force a retake
             await current_worker.save()
             attempts_left = 3 - current_worker.kyc_attempts
             raise HTTPException(
@@ -510,16 +441,13 @@ async def verify_worker_kyc(
                 detail=f"Verification failed. Please ensure the image is clear and well-lit. You have {attempts_left} automated attempts remaining."
             )
 
-    # =====================================================================
-    # 5. AUTOMATIC APPROVAL (If OCR Succeeds)
-    # =====================================================================
     if id_type == "AADHAAR":
         current_worker.adhar_card_number = verification_result["extracted_number"]
     else:
         current_worker.pan_card = verification_result["extracted_number"]
         
     current_worker.kyc_status = "VERIFIED"
-    current_worker.is_approved = True # Keep for backwards compatibility
+    current_worker.is_approved = True
     
     await current_worker.save()
 
@@ -571,7 +499,6 @@ async def update_availability_status(
     """
     current_worker.availability_status = data.is_available
     await current_worker.save()
-
     status_label = "Available" if data.is_available else "Not Available" 
     
     return {

@@ -8,10 +8,11 @@ from jose import jwt, JWTError
 
 from app.core.limiter import limiter
 from app.core.config import settings
-from app.models.employer import Employer
+from app.models.employer import Employer, EmployerType, SubscriptionTier
 from app.models.admin import Admin
 from app.models.auth import OTP, TokenBlacklist
 from app.core.security import create_access_token
+from app.models.employee import Employee
 
 # --- IMPORT OUR NEW SERVICE ---
 from app.services.otp import OTPService
@@ -83,6 +84,72 @@ async def request_login_otp(data: PublicOTPRequest, request: Request):
         
     return response
 
+# ==============================================================================
+# --- 1b. VERIFY OTP DURING LOGIN ---
+# ==============================================================================
+
+@router.post("/register/verify-otp", response_model=dict)
+@limiter.limit("5/minute")
+async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
+    """
+    Verifies the OTP and IMMEDIATELY creates the Employee/Employer record 
+    with their Name and Phone number.
+    """
+    is_email_auth = OTPService.is_email(data.identifier)
+    app_role = data.app_role.lower()
+    clean_phone = data.identifier[-10:]
+    
+    # 1. Double check they didn't register in the last 5 minutes
+    user = await OTPService.get_user_by_identifier(data.identifier)
+    if user:
+        raise HTTPException(status_code=409, detail="Number already registered. Please Login.")
+
+    # 2. Fetch the OTP record FIRST to grab the temporarily saved Name
+    otp_record = await OTP.find_one({"phone": clean_phone})
+    if not otp_record:
+        raise HTTPException(status_code=400, detail="Please request an OTP first.")
+    
+    saved_name = otp_record.name or "Unknown User"
+
+    # 3. Verify and consume the OTP
+    await OTPService.verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
+
+    # =================================================================
+    # 4. CREATE THE USER IN THE MAIN DATABASE IMMEDIATELY
+    # =================================================================
+    if app_role == "employee":
+        new_user = Employee(
+            phone=clean_phone,
+            name=saved_name,
+            # Note: category, location, etc. must be Optional in your Employee model!
+            is_active=True
+        )
+    else:
+        new_user = Employer(
+            phone=clean_phone,
+            name=saved_name,
+            is_active=True,
+            employer_type=EmployerType.COMPANY, 
+            subscription_tier=SubscriptionTier.FREE
+        )
+    
+    # Save to MongoDB
+    await new_user.insert()
+
+    # 5. Issue the PERMANENT Access Token
+    access_token = create_access_token(
+        subject=str(new_user.id), 
+        user_type=app_role
+    )
+    
+    return {
+        "status": "success",
+        "message": "Phone verified and account created! Please complete your profile.",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": str(new_user.id),
+        "user_name": new_user.name
+    }
 
 @router.post("/login", response_model=dict)
 @limiter.limit("5/minute")
