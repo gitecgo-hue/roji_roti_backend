@@ -93,7 +93,7 @@ async def register_employee(data: EmployeeRegistrationRequest):
             settings.SECRET_KEY, 
             algorithms=[settings.ALGORITHM]
         )
-        if payload.get("user_type") != "registration_token":
+        if payload.get("user_type") != "access_token":
             raise ValueError("Invalid token type")
             
         verified_phone = payload.get("sub")

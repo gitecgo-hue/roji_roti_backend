@@ -238,16 +238,16 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
     await verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
 
     # Issue Temporary Registration Token
-    registration_token = create_access_token(
+    access_token = create_access_token(
         subject=data.identifier, 
-        user_type="registration_token",
+        user_type="access_token",
         expires_delta=timedelta(minutes=15)
     )
     
     return {
         "status": "success",
         "message": "Phone verified. Proceed to registration.",
-        "registration_token": registration_token,
+        "access_token": access_token,
         "verified_phone": data.identifier
     }
 
