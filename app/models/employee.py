@@ -34,11 +34,11 @@ class Employee(Document):
     
     # --- Location Data (Integrated) ---
     current_location: Optional[GeoLocation] = None 
-    preferred_locations: List[str] = []
+    preferred_locations: Optional[List[str]] = None
     
     # --- Profile Details ---
-    experience: int = 0  # in years
-    languages: List[str] = ["Hindi"]
+    experience: Optional[int] = None  # in years
+    languages: Optional[List[str]] = ["Hindi"]
     expected_salary: Optional[str] = None 
     gender: Optional[str] = None
     

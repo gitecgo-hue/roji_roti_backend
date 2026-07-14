@@ -155,18 +155,19 @@ async def get_employee_dashboard(
 ):
     """
     Returns real-time stats of how many employers have 'unlocked' this worker.
+    Safely handles incomplete profiles by providing fallback strings.
     """
     unlock_count = await ContactUnlock.find(
         ContactUnlock.worker_id == current_employee.id
     ).count()
 
     return EmployeeDashboardResponse(
-        name=current_employee.name,
-        category=current_employee.category,
-        is_available=current_employee.availability_status,
+        name=current_employee.name or "User",
+        category=current_employee.category or "Profile Incomplete",
+        is_available=getattr(current_employee, "availability_status", False),
         total_unlocks=unlock_count,
-        location=current_employee.location_name,
-        daily_rate=float(current_employee.expected_salary) if current_employee.expected_salary and current_employee.expected_salary.isdigit() else None,
+        location=current_employee.location_name or "Location pending",
+        daily_rate=float(current_employee.expected_salary) if getattr(current_employee, "expected_salary", None) and current_employee.expected_salary.isdigit() else None,
         rating=getattr(current_employee, "rating", 0.0)
     )
 

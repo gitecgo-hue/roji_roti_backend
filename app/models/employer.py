@@ -18,7 +18,7 @@ class Employer(Document):
     # --- Core Identity ---
     employer_type: EmployerType
     phone: Indexed(str, unique=True)
-    location: str
+    location: Optional[str] = None
     profile_picture_url: Optional[str] = None
     hashed_password: Optional[str] = None
     
