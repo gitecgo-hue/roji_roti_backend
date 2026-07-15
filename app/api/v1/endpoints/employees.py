@@ -51,15 +51,30 @@ class LocationInput(BaseModel):
     latitude: float
     longitude: float
 
+class WorkExperienceInput(BaseModel):
+    job_title: str
+    company_name: Optional[str] = None
+    duration_months: Optional[int] = None
+
 class CompleteEmployeeProfileRequest(BaseModel):
     category: str
+    preferred_roles: Optional[List[str]] = []
     location_name: str
     location: Optional[LocationInput] = Field(default=None, description="Backend will auto-fill this using Ola Maps")
     preferred_locations: List[str] = []
+    
+    # Professional Details
     experience: int = 0
+    work_experience: Optional[List[WorkExperienceInput]] = []
+    skills: Optional[List[str]] = []
+    
+    # Basic Details
     languages: List[str] = []
+    current_salary: Optional[str] = None
     expected_salary: Optional[str] = None
+    age: Optional[int] = None
     gender: Optional[str] = None
+    education_level: Optional[str] = None
     email: Optional[EmailStr] = None
     referred_by_id: Optional[str] = None
 
@@ -109,6 +124,11 @@ async def complete_employee_profile(
         coordinates=[data.location.longitude, data.location.latitude]
     )
     
+    current_worker.preferred_roles = data.preferred_roles
+    current_worker.skills = data.skills
+    current_worker.current_salary = data.current_salary
+    current_worker.age = data.age
+    current_worker.education_level = data.education_level
     current_worker.trade_category = data.category
     current_worker.category = data.category
     current_worker.location = f"{data.location.latitude}, {data.location.longitude}"
