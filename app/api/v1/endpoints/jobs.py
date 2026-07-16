@@ -88,8 +88,7 @@ async def create_job_post(
         "message": "Job successfully posted and is now live for workers.",
         "job_id": str(new_job.id)
     }
-
-
+    
 # =====================================================================
 # WORKER: JOB DISCOVERY & SEARCH
 # =====================================================================
@@ -209,6 +208,36 @@ async def search_jobs(query: JobSearchQuery):
         
     return formatted_jobs
 
+
+@router.get("/{job_id}", response_model=Job, status_code=status.HTTP_200_OK)
+async def get_single_job(job_id: str):
+    """
+    Retrieves the complete details of a single job by its MongoDB ID.
+    """
+    # 1. Safely validate that the provided ID is a valid MongoDB ObjectId
+    try:
+        parsed_id = PydanticObjectId(job_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid Job ID format."
+        )
+
+    # 2. Fetch the job from the database
+    job = await Job.get(parsed_id)
+
+    # 3. Handle the case where the job doesn't exist
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Job not found."
+        )
+
+    # If you only want users to see active jobs, you can uncomment this:
+    if not job.is_active:
+        raise HTTPException(status_code=403, detail="This job is no longer active or has been closed.")
+
+    return job
 
 # =====================================================================
 # DATABASE MAINTENANCE (ADMIN TOOLS)
