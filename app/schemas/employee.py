@@ -115,3 +115,9 @@ class EmployeeDashboardResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True
     )
+
+class WorkExperienceInput(BaseModel):
+    job_title: str
+    company_name: Optional[str] = None
+    duration_months: Optional[int] = None
+    description: Optional[str] = None

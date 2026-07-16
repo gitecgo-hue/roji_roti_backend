@@ -17,7 +17,8 @@ from app.schemas.employee import (
     EmployeeResponse, 
     AvailabilityUpdate,
     EmployeeKYCUpdate,
-    EmployeeDashboardResponse 
+    EmployeeDashboardResponse,
+    WorkExperienceInput 
 )
 
 # --- Models ---
@@ -40,6 +41,7 @@ from app.services.subscriptions import SubscriptionService
 from app.services.kyc import KYCService
 from app.utils.maps import MapService
 from app.services.recommendation import RecommendationService
+from app.services.parser import ResumeParserService
 
 router = APIRouter()
 
@@ -411,6 +413,76 @@ async def update_employee_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_worker.phone
+    }
+
+@router.post("/me/upload-resume", status_code=status.HTTP_200_OK)
+async def upload_and_parse_resume(
+    resume_file: UploadFile = File(...),
+    current_worker: Employee = Depends(get_current_employee)
+):
+    """
+    1. Uploads the PDF to cloud storage.
+    2. Extracts text from the PDF.
+    3. Uses AI to parse the text into structured data.
+    4. Auto-fills the worker's profile in the database.
+    """
+    # 1. Validate File Type
+    if not resume_file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF resumes are supported right now.")
+
+    file_bytes = await resume_file.read()
+
+    # 2. Upload the actual file to your cloud storage (AWS S3, Cloudinary, etc.)
+    # resume_url = await StorageService.upload_document(file_bytes, folder="resumes")
+    # current_worker.resume_url = resume_url
+
+    # 3. Extract Text from the PDF
+    try:
+        raw_text = await ResumeParserService.extract_text_from_pdf(file_bytes)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # 4. Ask the AI to parse the text into a structured dictionary
+    parsed_data = await ResumeParserService.parse_resume_to_json(raw_text)
+
+    # 5. Auto-Fill the Database Profile!
+    # We use 'getattr' or '.get()' to safely handle missing data if the AI couldn't find it.
+    
+    if parsed_data.get("skills"):
+        # Merge new skills with existing ones, avoiding duplicates
+        existing_skills = set(current_worker.skills or [])
+        existing_skills.update(parsed_data["skills"])
+        current_worker.skills = list(existing_skills)
+        
+    if parsed_data.get("education_level"):
+        current_worker.education_level = parsed_data["education_level"]
+        
+    if parsed_data.get("experience_years"):
+        current_worker.experience_years = parsed_data["experience_years"]
+        current_worker.experience = parsed_data["experience_years"]
+        
+    if parsed_data.get("languages"):
+        current_worker.languages = parsed_data["languages"]
+
+    if parsed_data.get("work_experience"):
+        # Convert the AI's raw dictionaries into your Pydantic WorkExperience models
+        new_experiences = []
+        for exp in parsed_data["work_experience"]:
+            new_experiences.append(WorkExperienceInput(**exp))
+        current_worker.work_experience = new_experiences
+
+    # 6. Save the fully updated profile to MongoDB
+    await current_worker.save()
+
+    return {
+        "status": "success",
+        "message": "Resume uploaded and profile successfully auto-filled!",
+        "extracted_data": parsed_data,
+        "profile": {
+            "skills": current_worker.skills,
+            "experience": current_worker.experience_years,
+            "education": current_worker.education_level
+        }
     }
 
 @router.post("/me/verify-kyc")
