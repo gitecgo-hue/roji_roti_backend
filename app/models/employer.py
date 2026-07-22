@@ -46,6 +46,8 @@ class Employer(Document):
     subscription_tier: SubscriptionTier = SubscriptionTier.FREE
     is_active: bool = True
     is_verified: bool = False # Verified by Admin
+
+    last_otp_requested_at: Optional[datetime] = None
     
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -44,7 +44,7 @@ async def create_job(
     """
     # 1. Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
-        employer_id=current_employer.id,
+        employer_id=str(current_employer.id),
         title=job_data.title,
         short_description=job_data.short_description,
         description=job_data.description,

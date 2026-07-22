@@ -149,7 +149,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
     my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     my_job_ids = [str(job.id) for job in my_jobs]
     
-    active_jobs = sum(1 for job in my_jobs if job.is_active)
+    active_jobs = sum(1 for job in my_jobs if job.status == "published")
     
     if my_job_ids:
         total_apps = await JobApplication.find(
@@ -167,7 +167,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
     
     return EmployerDashboardResponse(
         company_name=current_employer.company_name or current_employer.name,
-        subscription_tier=sub.plan_type.capitalize(),        
+        subscription_tier=sub.plan_type.lower(),        
         is_active=sub.is_active,
         days_left=days_left,
         expiry_date=sub.expiry_date,

@@ -240,10 +240,10 @@ async def get_employee_dashboard(
 
     return EmployeeDashboardResponse(
         name=current_employee.name or "User",
-        category=current_employee.category or "Profile Incomplete",
+        category=getattr(current_employee, "category", getattr(current_employee, "trade_category", "Profile Incomplete")),
         is_available=getattr(current_employee, "availability_status", False),
         total_unlocks=unlock_count,
-        location=current_employee.location_name or "Location pending",
+        location=current_employee.location.get("name", "Location pending") if current_employee.location else "Location pending",
         daily_rate=float(current_employee.expected_salary) if getattr(current_employee, "expected_salary", None) and current_employee.expected_salary.isdigit() else None,
         rating=getattr(current_employee, "rating", 0.0)
     )
@@ -256,7 +256,7 @@ async def get_job_feed():
     The main feed for employees. 
     Only returns jobs that are active.
     """
-    active_jobs = await Job.find({"is_active": True}).to_list()
+    active_jobs = await Job.find(Job.status == "published").to_list()
     
     if not active_jobs:
         return {"message": "No active jobs found right now. Check back later!"}
