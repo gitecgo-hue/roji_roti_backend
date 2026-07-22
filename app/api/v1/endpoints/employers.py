@@ -196,7 +196,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
 # 1. UPDATE PERSONAL PROFILE
 # ==========================================
 
-@router.put("/profile/personal")
+@router.put("/profile_personal_update")
 async def update_personal_profile(
     profile_data: EmployerPersonalProfileUpdate,
     current_employer: Employer = Depends(get_current_employer)
@@ -227,7 +227,7 @@ async def update_personal_profile(
 # 2. UPDATE COMPANY PROFILE
 # ==========================================
 
-@router.put("/profile/company")
+@router.put("/profile_company_update")
 async def update_company_profile(
     company_data: EmployerCompanyProfileUpdate,
     current_employer: Employer = Depends(get_current_employer)
@@ -309,6 +309,7 @@ async def list_job_applicants(
     
     return results
 
+# --- Update Application Status ---
 @router.patch("/applications/{application_id}/status")
 async def update_application_status(
     application_id: str,
@@ -471,7 +472,7 @@ async def save_candidate_search(
     response_data["id"] = str(new_saved_search.id)
     return response_data
 
-
+# --- Get Saved Searches ---
 @router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
 async def get_saved_searches(
     current_employer: Employer = Depends(get_current_employer)

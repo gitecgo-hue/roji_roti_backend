@@ -15,6 +15,8 @@ from app.api.dependencies import get_current_employee, get_current_employer
 
 # --- Schemas ---
 from app.schemas.employee import (
+    EmployeeProfileUpdate,
+    EmployeeProfileUpdate,
     EmployeeResponse, 
     AvailabilityUpdate,
     EmployeeKYCUpdate,
@@ -36,13 +38,15 @@ from app.models.category import Category
 # --- Services ---
 from app.services.email import EmailService
 from app.services.webhooks import WebhookService 
-from app.utils.storage import StorageService
 from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
 from app.services.kyc import KYCService
-from app.utils.maps import MapService
 from app.services.recommendation import RecommendationService
 from app.services.parser import ResumeParserService
+
+# --- Utilities ---
+from app.utils.storage import StorageService
+from app.utils.maps import MapService
 
 router = APIRouter()
 
@@ -249,6 +253,55 @@ async def get_employee_dashboard(
         rating=getattr(current_employee, "rating", 0.0)
     )
 
+# --- Profile Update ---
+@router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
+async def update_employee_profile(
+    profile_data: EmployeeProfileUpdate,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Updates the candidate's personal and professional details in a single request.
+    """
+    update_dict = profile_data.model_dump(exclude_unset=True)
+    
+    # Check if the email is being changed to reset verification status
+    if "email" in update_dict and update_dict["email"] != getattr(current_employee, "email", None):
+        current_employee.email_verified = False 
+        
+    # Dynamically apply all provided fields to the database model
+    for field, value in update_dict.items():
+        setattr(current_employee, field, value)
+        
+    await current_employee.save()
+    
+    return {
+        "message": "Profile updated successfully",
+        "name": getattr(current_employee, "name", None),
+        "title": getattr(current_employee, "title", None),
+        "is_profile_complete": bool(
+            getattr(current_employee, "name", None) and 
+            getattr(current_employee, "skills", None) and 
+            getattr(current_employee, "total_experience", None)
+        )
+    }
+
+# --- Profile Management ---
+
+@router.get("/me")
+async def read_employee_me(current_employee: Employee = Depends(get_current_employee)):
+    """
+    Fetches the currently logged-in employee's full profile.
+    """
+    # Convert the Beanie/Pydantic document to a dictionary
+    employee_data = current_employee.model_dump()
+    
+    # Explicitly convert the MongoDB ObjectId to a string
+    employee_data["id"] = str(current_employee.id)
+    
+    # If nested objects are models, model_dump() handles them, 
+    # but returning the dictionary directly bypasses strict validation mismatches.
+    return employee_data
+
 # --- Discovery & Recommendations ---
 
 @router.get("/jobs", status_code=status.HTTP_200_OK)
@@ -426,26 +479,9 @@ async def apply_for_job(
 
     return {"message": "Application submitted successfully!", "status": new_app.status}
 
-# --- Profile Management ---
-
-@router.get("/me")
-async def read_employee_me(current_employee: Employee = Depends(get_current_employee)):
-    """
-    Fetches the currently logged-in employee's full profile.
-    """
-    # Convert the Beanie/Pydantic document to a dictionary
-    employee_data = current_employee.model_dump()
-    
-    # Explicitly convert the MongoDB ObjectId to a string
-    employee_data["id"] = str(current_employee.id)
-    
-    # If nested objects are models, model_dump() handles them, 
-    # but returning the dictionary directly bypasses strict validation mismatches.
-    return employee_data
-
 # --- Profile Updates ---
 
-@router.patch("/me/phone", status_code=status.HTTP_200_OK)
+@router.patch("/phone_no_update", status_code=status.HTTP_200_OK)
 async def update_employee_phone(
     data: UpdatePhoneRequest,
     current_worker: Employee = Depends(get_current_employee)

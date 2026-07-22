@@ -24,21 +24,40 @@ class CompleteEmployeeProfileRequest(BaseModel):
     # 4. Location (Usually required for the map matching)
     location_name: Optional[str] = None
 
+# --- Employee Profile Update Schemas ---
+class EmployeeProfileUpdate(BaseModel):
+    """Unified schema for updating the employee's full profile"""
+    
+    # --- Personal Details ---
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    location_name: Optional[str] = None 
+    
+    # --- Professional Details ---
+    title: Optional[str] = None 
+    skills: Optional[List[str]] = None
+    total_experience: Optional[float] = None 
+    expected_salary: Optional[float] = None
+    education: Optional[str] = None 
+    resume_url: Optional[str] = None
+
+# --- location Input for Job Search ---
 class LocationInput(BaseModel):
     """Handles latitude and longitude for GPS-based job filtering."""
     latitude: float
     longitude: float
 
-# --- Worker Profile & Status Schemas ---
+# --- Employee Profile & Status Schemas ---
 
 class AvailabilityUpdate(BaseModel):
     """
-    Schema for the worker availability toggle.
+    Schema for the employee availability toggle.
     True: Available for jobs (Green).
     False: Not available (Red).
     """
     is_available: bool
 
+# --- Employee KYC Update Schema ---
 class EmployeeKYCUpdate(BaseModel):
     """
     Schema for updating sensitive KYC documents after registration.
@@ -59,7 +78,6 @@ class EmployeeKYCUpdate(BaseModel):
     )
 
 # --- Registration & Response Schemas ---
-
 class EmployeeCreate(BaseModel):
     """
     Fields required for mobile registration of Job Seekers.
@@ -93,6 +111,7 @@ class EmployeeCreate(BaseModel):
     # Referral and tracking
     referred_by_id: Optional[str] = None
 
+# --- Employee Response Schemas ---
 class EmployeeResponse(BaseModel):
     id: str
     role: str
@@ -129,6 +148,7 @@ class EmployeeResponse(BaseModel):
     status: Optional[str] = None
     verified_by_admin: bool = False
 
+# --- Employee Dashboard Response Schema ---
 class EmployeeDashboardResponse(BaseModel):
     """
     Schema for the worker-facing dashboard.
@@ -146,6 +166,7 @@ class EmployeeDashboardResponse(BaseModel):
         from_attributes=True
     )
 
+# --- Employee Work Experience & Skills Input Schemas ---
 class WorkExperienceInput(BaseModel):
     company: str = Field(..., description="Name of the company")
     title: str = Field(..., description="Job title or role")
