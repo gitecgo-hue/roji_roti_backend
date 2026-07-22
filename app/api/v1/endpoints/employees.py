@@ -103,10 +103,11 @@ async def complete_employee_profile(
     # =================================================================
     # 1. OLA MAPS MAGIC: Auto-Geocode the typed location
     # =================================================================
-    if data.location_name and not data.location:
+    if data.location_name and not getattr(data, "location", None):
         coords = await MapService.get_coordinates(data.location_name)
         
         if coords:
+            # Assuming LocationInput is imported and available
             data.location = LocationInput(
                 latitude=coords["latitude"],
                 longitude=coords["longitude"]
@@ -117,54 +118,108 @@ async def complete_employee_profile(
                 status_code=400, 
                 detail=f"Could not find coordinates for '{data.location_name}'. Please try a more specific area."
             )
-    elif not data.location and not data.location_name:
+    elif not getattr(data, "location", None) and not data.location_name:
         raise HTTPException(status_code=400, detail="A location name must be provided.")
 
-    # 2. Update Database Record
-    geo_location = GeoLocation(
-        type="Point",
-        coordinates=[data.location.longitude, data.location.latitude]
-    )
+    # =================================================================
+    # 2. UPDATE DATABASE RECORD (Safe Unpacking & Conversion)
+    # =================================================================
     
-    current_worker.preferred_roles = data.preferred_roles
-    current_worker.skills = data.skills
-    current_worker.current_salary = data.current_salary
-    current_worker.age = data.age
-    current_worker.education_level = data.education_level
-    current_worker.trade_category = data.category
-    current_worker.category = data.category
-    current_worker.location = f"{data.location.latitude}, {data.location.longitude}"
-    current_worker.location_name = data.location_name
-    current_worker.current_location = geo_location
-    current_worker.experience_years = data.experience
-    current_worker.experience = data.experience
-    current_worker.preferred_locations = data.preferred_locations
-    current_worker.languages = data.languages
-    current_worker.expected_salary = data.expected_salary
-    current_worker.gender = data.gender
-    current_worker.email = data.email
-    current_worker.referred_by_id = data.referred_by_id
+    # --- Location Data ---
+    if getattr(data, "location", None):
+        geo_location = GeoLocation(
+            type="Point",
+            coordinates=[data.location.longitude, data.location.latitude]
+        )
+        current_worker.current_location = geo_location
+        # The ultimate model stores 'location' as an object, but if you have a string representation:
+        # current_worker.location = f"{data.location.latitude}, {data.location.longitude}"
     
+    if data.location_name:
+        current_worker.location_name = data.location_name
+
+    if getattr(data, "preferred_locations", None):
+        current_worker.preferred_locations = data.preferred_locations
+
+    # --- Basic & Demographic Details ---
+    if getattr(data, "email", None):
+        current_worker.email = data.email
+    if getattr(data, "current_salary", None):
+        current_worker.current_salary = data.current_salary
+    if getattr(data, "expected_salary", None):
+        current_worker.expected_salary = data.expected_salary
+    if getattr(data, "age", None) is not None:
+        current_worker.age = data.age
+    if getattr(data, "gender", None):
+        current_worker.gender = data.gender
+    if getattr(data, "languages", None):
+        current_worker.languages = data.languages
+    if getattr(data, "education_level", None):
+        # Using the Education sub-model from the Ultimate Schema
+        from app.models.employee import Education
+        current_worker.education = [Education(institution="Not Specified", degree=data.education_level)]
+
+    # --- Category / Header Details ---
+    if getattr(data, "category", None):
+        current_worker.trade_category = data.category
+        current_worker.category = data.category
+    if getattr(data, "preferred_roles", None):
+        current_worker.preferred_roles = data.preferred_roles
+    if getattr(data, "experience", None) is not None:
+        current_worker.experience = data.experience
+        current_worker.experience_years = data.experience
+
+    # --- Skills Array (Model Conversion) ---
+    if getattr(data, "skills", None):
+        current_worker.skills = [
+            Skill(name=s.name, level=s.level, years=s.years) 
+            for s in data.skills
+        ]
+
+    # --- Work Experience Array (Model Conversion) ---
+    if getattr(data, "work_experience", None):
+        current_worker.work_experience = [
+            WorkExperience(
+                company=exp.company,
+                title=exp.title,
+                start_date=exp.start_date,
+                end_date=exp.end_date,
+                description=exp.description
+            ) for exp in data.work_experience
+        ]
+        
+    if getattr(data, "referred_by_id", None):
+        current_worker.referred_by_id = data.referred_by_id
+
+    # 3. Save to MongoDB
     await current_worker.save()
 
-    # 3. Trigger Webhook 
+    # =================================================================
+    # 4. TRIGGER WEBHOOK & RETURN
+    # =================================================================
     await WebhookService.trigger_event("worker_registered", {
         "worker_id": str(current_worker.id),
-        "name": current_worker.name,
-        "category": current_worker.category,
-        "location": current_worker.location_name
+        "name": getattr(current_worker, "name", "User"),
+        "category": getattr(current_worker, "category", "Unspecified"),
+        "location": getattr(current_worker, "location_name", "Unspecified")
     })
     
     return {
         "status": "success",
         "message": "Profile completed successfully!",
+        "profile_summary": {
+            "name": getattr(current_worker, "name", "User"),
+            "roles": getattr(current_worker, "preferred_roles", []),
+            "skills_count": len(getattr(current_worker, "skills", []) or []),
+            "experience_entries": len(getattr(current_worker, "work_experience", []) or [])
+        },
         "employee": EmployeeResponse(
             id=str(current_worker.id),
             phone=current_worker.phone,
-            name=current_worker.name,
-            category=current_worker.category,
-            availability_status=current_worker.availability_status,
-            rating=current_worker.rating,
+            name=getattr(current_worker, "name", "User"),
+            category=getattr(current_worker, "category", None),
+            availability_status=getattr(current_worker, "availability_status", True),
+            rating=getattr(current_worker, "rating", 0.0),
             created_at=current_worker.created_at
         )
     }

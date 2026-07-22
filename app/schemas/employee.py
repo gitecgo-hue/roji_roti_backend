@@ -1,10 +1,28 @@
 import re
 from typing import List, Optional
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from beanie import PydanticObjectId
 
-# --- Core Utility Schemas ---
+# --- Main Profile Completion Request ---
+class CompleteEmployeeProfileRequest(BaseModel):
+    # 1. Header / Category Details (Looking for jobs in...)
+    preferred_roles: Optional[List[str]] = Field(default=[], description="List of job roles they want")
+    
+    # 2. Basic Details
+    current_salary: Optional[str] = Field(None, description="E.g., '14800 per month'")
+    email: Optional[EmailStr] = None
+    age: Optional[int] = None
+    gender: Optional[str] = Field(None, description="Male, Female, Other")
+    languages: Optional[List[str]] = Field(default=[], description="E.g., ['English', 'Hindi']")
+    education_level: Optional[str] = Field(None, description="E.g., 'Graduate', '12th Pass'")
+    
+    # 3. Professional Details
+    skills: Optional[List[SkillInput]] = []
+    work_experience: Optional[List[WorkExperienceInput]] = []
+    
+    # 4. Location (Usually required for the map matching)
+    location_name: Optional[str] = None
 
 class LocationInput(BaseModel):
     """Handles latitude and longitude for GPS-based job filtering."""
@@ -76,28 +94,40 @@ class EmployeeCreate(BaseModel):
     referred_by_id: Optional[str] = None
 
 class EmployeeResponse(BaseModel):
-    """
-    Standard data returned to the platform for worker profiles.
-    """
-    # Let Beanie handle the ObjectId-to-String conversion
-    id: PydanticObjectId
-    
+    id: str
+    role: str
     phone: str
+    phone_verified: bool
     
-    # Optional fields to allow skeleton profiles to be read without crashing
+    # Names & Bio
     name: Optional[str] = None
-    category: Optional[str] = None
-    location_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    display_name: Optional[str] = None
+    summary: Optional[str] = None
+    email: Optional[EmailStr] = None
+    avatar: Optional[str] = None
     
-    # Made optional with defaults just in case the skeleton profile lacks them
-    availability_status: Optional[bool] = False 
-    rating: float = Field(default=0.0, description="1-5 star aggregate rating")
-    created_at: Optional[datetime] = None
-
-    model_config = ConfigDict(
-        from_attributes=True,
-        populate_by_name=True
-    )
+    # Location
+    location: Optional[dict] = None
+    
+    # Professional Details (Auto-serialized by FastAPI)
+    skills: Optional[list] = []
+    work_experience: Optional[list] = []
+    education: Optional[list] = []
+    documents: Optional[list] = []
+    
+    # Preferences & Settings
+    contact_visibility: Optional[str] = None
+    salary_expectation: Optional[dict] = None
+    availability: Optional[dict] = None
+    preferences: Optional[dict] = None
+    social_links: Optional[dict] = None
+    
+    # System & Status
+    metadata: Optional[dict] = None
+    status: Optional[str] = None
+    verified_by_admin: bool = False
 
 class EmployeeDashboardResponse(BaseModel):
     """
@@ -117,7 +147,13 @@ class EmployeeDashboardResponse(BaseModel):
     )
 
 class WorkExperienceInput(BaseModel):
-    job_title: str
-    company_name: Optional[str] = None
-    duration_months: Optional[int] = None
+    company: str = Field(..., description="Name of the company")
+    title: str = Field(..., description="Job title or role")
+    start_date: date = Field(..., description="Format: YYYY-MM-DD")
+    end_date: Optional[date] = Field(None, description="Format: YYYY-MM-DD. Null means currently working here.")
     description: Optional[str] = None
+
+class SkillInput(BaseModel):
+    name: str
+    level: Optional[str] = Field(None, description="beginner, intermediate, expert")
+    years: Optional[float] = None
