@@ -1,56 +1,60 @@
 from beanie import Document, Indexed
-from pydantic import Field, EmailStr, ConfigDict
-from typing import Optional
-from datetime import datetime
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from typing import Optional, List
+from datetime import datetime, timezone
 from enum import Enum
 
 class EmployerType(str, Enum):
-    INDIVIDUAL = "individual"
     COMPANY = "company"
+    INDIVIDUAL = "individual"
+    AGENCY = "agency"
 
 class SubscriptionTier(str, Enum):
-    FREE = "Free"
-    BASIC = "Basic"
-    PREMIUM = "Premium"
-    ENTERPRISE = "Enterprise"
+    FREE = "free"
+    BASIC = "basic"
+    PREMIUM = "premium"
+    ENTERPRISE = "enterprise"
+
+class GeoLocation(BaseModel):
+    type: str = "Point"
+    coordinates: List[float]
 
 class Employer(Document):
-    # --- Core Identity ---
-    employer_type: EmployerType
+    # --- Core Identity & Auth ---
     phone: Indexed(str, unique=True)
-    location: Optional[str] = None
-    profile_picture_url: Optional[str] = None
+    phone_verified: bool = False
+    email: Optional[EmailStr] = None
     hashed_password: Optional[str] = None
     
-    # --- Profile Details ---
-    name: Optional[str] = None  # For Individuals
-    company_name: Optional[str] = None  # For Companies
-    contact_name: Optional[str] = None
-    email: Optional[EmailStr] = None
+    # --- Company Details ---
+    name: Optional[str] = Field(None, description="Owner/Contact Name")
+    company_name: Optional[str] = None
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
     
-    # --- OTP & Verification ---
-    otp_code: Optional[str] = None
-    otp_expires_at: Optional[datetime] = None
-    last_otp_requested_at: Optional[datetime] = None
-
-    # --- Verification & Trust ---
-    gst_number: Optional[str] = None
-    is_gst_verified: bool = False  # Controlled by Admin
+    # --- Industry & Size ---
+    industry: Optional[str] = None
+    company_size: Optional[str] = Field(None, description="e.g., '1-10', '50-200'")
+    gstin: Optional[str] = None
     
-    # --- Subscription Logic (Integrated) ---
-    # We use the Enum for plan_type to prevent typos
+    # --- Location Data ---
+    address: Optional[str] = None
+    location: Optional[GeoLocation] = None
+    
+    # --- System & Status ---
+    employer_type: EmployerType = EmployerType.COMPANY
     subscription_tier: SubscriptionTier = SubscriptionTier.FREE
-    subscription_end_date: Optional[datetime] = None
+    is_active: bool = True
+    is_verified: bool = False # Verified by Admin
     
-    # --- Platform Status ---
-    # is_active controls if the employer can log in or post jobs
-    is_active: bool = True 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        populate_by_name=True
-    )
+    model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
     class Settings:
         name = "employers"
+        indexes = [
+            "company_name",
+            [("location.coordinates", "2dsphere")]
+        ]

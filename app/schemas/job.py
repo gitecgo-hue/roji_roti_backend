@@ -1,64 +1,40 @@
-from beanie import PydanticObjectId
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Optional, List
 from datetime import datetime
 
-# =====================================================================
-# LOCATION SCHEMAS
-# =====================================================================
+# You can import these Enums directly from your job model!
+from app.models.job import JobStatus, JobType 
 
-class LocationInput(BaseModel):
-    latitude: float
-    longitude: float
-
-
-# =====================================================================
-# JOB CREATION REQUEST
-# =====================================================================
+class SalaryRangeInput(BaseModel):
+    min: Optional[float] = None
+    max: Optional[float] = None
+    currency: Optional[str] = "INR"
 
 class JobCreateRequest(BaseModel):
-    title: str = Field(..., min_length=3, max_length=100, description="e.g., 'Need 2 Carpenters for Cabinet Work'")
-    description: str = Field(..., min_length=10)
-    category: str = Field(..., description="Must match one of the system categories")
+    """Schema for the frontend to send when creating a new job"""
+    title: str = Field(..., min_length=3, description="Job Title")
+    short_description: Optional[str] = Field(None, max_length=300)
+    description: Optional[str] = None
     
-    # Precise Geospatial Location (Required for Worker Proximity Feed)
-    location: LocationInput
-    location_name: str = Field(..., description="City or specific area name")
-    
-    # Broader Location Fallbacks (Kept from your original schema)
+    category: Optional[str] = None
+    location_name: Optional[str] = None
+    locations: Optional[List[str]] = []
     is_pan_india: bool = False
-    locations: List[str] = Field(default=[], description="List of additional cities if applicable")
     
-    # Compensation & Details
-    salary_range: Optional[str] = Field(default=None, description="E.g., '15000-20000', '15000/month'")
-    requirements: Optional[str] = Field(default=None, description="Specific skills or tools required")
-    required_experience: int = Field(default=0, ge=0, description="Years of experience required")
+    job_type: Optional[JobType] = JobType.FULL_TIME
+    salary_range: Optional[SalaryRangeInput] = None
+    required_experience: Optional[float] = Field(0.0, ge=0)
+    skills: Optional[List[str]] = []
     
     is_urgent: bool = False
+    status: JobStatus = JobStatus.DRAFT
 
-
-# =====================================================================
-# JOB RESPONSE
-# =====================================================================
-
-class JobResponse(BaseModel):
-    id: PydanticObjectId
+class JobResponse(JobCreateRequest):
+    """Schema for sending the job data back to the frontend"""
+    id: str
     employer_id: str
-    title: str
-    description: str
-    category: str
+    slug: Optional[str] = None
+    posted_at: Optional[datetime] = None
     
-    location_name: str
-    is_pan_india: bool
-    locations: List[str]
-    
-    salary_range: Optional[str] = None
-    requirements: Optional[str] = None
-    required_experience: int
-    is_urgent: bool
-    is_active: bool
-    
-    created_at: datetime
-
     class Config:
         from_attributes = True

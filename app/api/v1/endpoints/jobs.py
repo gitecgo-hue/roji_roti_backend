@@ -1,14 +1,12 @@
-# --- Updated app/api/v1/endpoints/jobs.py ---
-
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks 
 from fastapi.responses import StreamingResponse, RedirectResponse 
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 import pymongo
 
-from app.models.job import Job
+from app.models.job import Job, SalaryRange
 from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
 from app.schemas.job import JobCreateRequest, JobResponse
@@ -36,58 +34,52 @@ class JobSearchQuery(BaseModel):
 # EMPLOYER: JOB MANAGEMENT
 # =====================================================================
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_job_post(
-    data: JobCreateRequest,
-    background_tasks: BackgroundTasks,
+@router.post("/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+async def create_job(
+    job_data: JobCreateRequest,
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Creates a new job posting after verifying the employer has sufficient subscription quota.
+    Creates a new job posting for the logged-in employer.
     """
-    employer_id_str = str(current_employer.id)
-
-    # 1. Quota Check: Does this employer have permission to post a job?
-    # Automatically throws a 403 error if they are out of quota!
-    await SubscriptionService.check_quota(
-        employer_id=employer_id_str, 
-        action_type="post_job"
-    )
-
-    # 2. Prepare the Geospatial data
-    geo_location = GeoLocation(
-        type="Point",
-        coordinates=[data.location.longitude, data.location.latitude]
-    )
-
-    # 3. Create the Database Document
+    # 1. Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
-        employer_id=employer_id_str,
-        title=data.title,
-        description=data.description,
-        category=data.category,
-        location_name=data.location_name,
-        current_location=geo_location,
-        is_pan_india=data.is_pan_india,
-        locations=data.locations,
-        salary_range=data.salary_range,
-        requirements=data.requirements,
-        required_experience=data.required_experience,
-        is_urgent=data.is_urgent,
-        is_active=True
+        employer_id=current_employer.id,
+        title=job_data.title,
+        short_description=job_data.short_description,
+        description=job_data.description,
+        category=job_data.category,
+        location_name=job_data.location_name,
+        locations=job_data.locations,
+        is_pan_india=job_data.is_pan_india,
+        job_type=job_data.job_type,
+        required_experience=job_data.required_experience,
+        skills=job_data.skills,
+        is_urgent=job_data.is_urgent,
+        status=job_data.status
     )
-    
+
+    # 2. Handle nested objects like Salary Range
+    if job_data.salary_range:
+        new_job.salary_range = SalaryRange(
+            min=job_data.salary_range.min,
+            max=job_data.salary_range.max,
+            currency=job_data.salary_range.currency
+        )
+
+    # 3. If published immediately, set the posted_at time
+    if new_job.status == "published":
+        new_job.posted_at = datetime.now(timezone.utc)
+
+    # 4. Save to Database
     await new_job.insert()
 
-    # 4. Usage Tracking & Background Notification
-    await SubscriptionService.increment_usage(employer_id_str, action_type="post_job")
-    background_tasks.add_task(NotificationService.broadcast_new_job, str(new_job.id))
+    # 5. Return response (FastAPI handles mapping the _id to 'id' automatically based on our response schema)
+    response_dict = new_job.model_dump()
+    response_dict["id"] = str(new_job.id)
+    response_dict["employer_id"] = str(new_job.employer_id)
 
-    return {
-        "status": "success",
-        "message": "Job successfully posted and is now live for workers.",
-        "job_id": str(new_job.id)
-    }
+    return response_dict
     
 # =====================================================================
 # WORKER: JOB DISCOVERY & SEARCH

@@ -128,8 +128,6 @@ class Employee(Document):
     class Settings:
         name = "employees"
         indexes = [
-            "phone", 
-            "email",
             "role",
             "status",
             [("location.coordinates", "2dsphere")] 

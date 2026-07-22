@@ -36,6 +36,18 @@ async def connect_to_mongo():
     
     # 2. Get the specific database instance
     database = db.client[settings.DATABASE_NAME]
+
+    # =================================================================
+    # 2.5 FORCE DROP OLD CONFLICTING INDEXES
+    # =================================================================
+    try:
+        logger.info("Checking for old conflicting 'phone_1' indexes...")
+        await database.employees.drop_index("phone_1")
+        await database.employers.drop_index("phone_1")
+        logger.info("Successfully dropped old phone indexes!")
+    except Exception:
+        # If they don't exist, MongoDB throws an error. We just ignore it and move on!
+        logger.info("No conflicting indexes found. Moving on.")
     
     # 3. Initialize Beanie with the full suite of models
     await init_beanie(
@@ -43,14 +55,14 @@ async def connect_to_mongo():
         document_models=[
             Admin,
             Employee,
-            Employer,         
+            Employer,        
             Job,
             Application,
             JobApplication,
-            Notification,         
+            Notification,        
             Rating,
-            Category,         
-            Subscription,     
+            Category,        
+            Subscription,    
             OTP,
             TokenBlacklist,
             Payment,
