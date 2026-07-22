@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
-# You can import these Enums directly from your job model!
 from app.models.job import JobStatus, JobType 
 
 class SalaryRangeInput(BaseModel):
@@ -35,6 +34,20 @@ class JobResponse(JobCreateRequest):
     employer_id: str
     slug: Optional[str] = None
     posted_at: Optional[datetime] = None
+ 
+    class Config:
+        from_attributes = True
+
+class JobDashboardResponse(BaseModel):
+    """Schema for the Employer Dashboard job cards"""
+    id: str
+    title: str
+    location_name: Optional[str] = None
+    status: JobStatus
+    job_type: Optional[JobType] = None
+    posted_at: Optional[datetime] = None
+    applied_count: int = 0
+    database_matches: int = 0
     
     class Config:
         from_attributes = True

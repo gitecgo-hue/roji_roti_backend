@@ -35,11 +35,18 @@ class Employer(Document):
     # --- Industry & Size ---
     industry: Optional[str] = None
     company_size: Optional[str] = Field(None, description="e.g., '1-10', '50-200'")
+    # Add these inside your Employer class
     gstin: Optional[str] = None
+    billing_address: Optional[str] = None
+    available_credits: int = 0
     
     # --- Location Data ---
     address: Optional[str] = None
     location: Optional[GeoLocation] = None
+
+    # --- Referral & Tracking ---
+    referral_code: Optional[str] = None
+    referred_by_code: Optional[str] = None
     
     # --- System & Status ---
     employer_type: EmployerType = EmployerType.COMPANY

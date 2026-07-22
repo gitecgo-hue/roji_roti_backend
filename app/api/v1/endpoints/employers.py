@@ -5,6 +5,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import List, Optional
 from beanie import PydanticObjectId
+import re
 
 # --- Core & Settings ---
 from app.core.config import settings
@@ -20,12 +21,18 @@ from app.models.contact import ContactUnlock
 from app.models.review import Review 
 from app.models.job import Job  
 from app.models.auth import OTP
+from app.models.saved_search import SavedSearch
 from app.models.application import JobApplication, ApplicationStatus
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
-from app.utils.maps import MapService
 from app.schemas.employer import EmployerDashboardResponse
+from app.schemas.search import CandidateSearchRequest
+from app.schemas.search import SavedSearchCreate, SavedSearchResponse
+from app.schemas.employer import EmployerPersonalProfileUpdate, EmployerCompanyProfileUpdate
+from app.schemas.employer import ReferralDashboardResponse
+from app.utils.referral import generate_referral_code
+from app.utils.maps import MapService
 
 router = APIRouter()
 
@@ -178,6 +185,61 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
         contacts_viewed=sub.contacts_checked
     )
 
+# ==========================================
+# 1. UPDATE PERSONAL PROFILE
+# ==========================================
+
+@router.put("/profile/personal")
+async def update_personal_profile(
+    profile_data: EmployerPersonalProfileUpdate,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Updates the individual recruiter/owner's personal details.
+    Triggered from the 'View profile' frontend screen.
+    """
+    # Only update fields that were actually provided in the request
+    if profile_data.name is not None:
+        current_employer.name = profile_data.name
+        
+    if profile_data.email is not None:
+        # Optional: Add logic here to check if the email is already in use by another account
+        current_employer.email = profile_data.email
+
+    await current_employer.save()
+    
+    return {
+        "message": "Personal profile updated successfully",
+        "name": current_employer.name,
+        "email": current_employer.email
+    }
+
+# ==========================================
+# 2. UPDATE COMPANY PROFILE
+# ==========================================
+
+@router.put("/profile/company")
+async def update_company_profile(
+    company_data: EmployerCompanyProfileUpdate,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Updates the business details.
+    Triggered from the 'Company profile' frontend screen.
+    """
+    # Using a dynamic update loop for cleaner code
+    update_dict = company_data.model_dump(exclude_unset=True)
+    
+    for field, value in update_dict.items():
+        setattr(current_employer, field, value)
+        
+    await current_employer.save()
+    
+    return {
+        "message": "Company profile updated successfully",
+        "company_name": current_employer.company_name,
+        "is_profile_complete": bool(current_employer.company_name and current_employer.industry)
+    }
 
 # =====================================================================
 # CORE RECRUITMENT FLOW (ATS)
@@ -278,8 +340,60 @@ async def update_application_status(
 # DISCOVERY, SEARCH & ACTIONS
 # =====================================================================
 
-@router.get("/search-workers", response_model=List[dict])
-async def search_workers(
+@router.post("/employee-search", response_model=List[dict])
+async def search_candidates(
+    search_data: CandidateSearchRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Advanced candidate search engine based on frontend filters.
+    """
+    query = {}
+    
+    # 1. Keyword Search (Matches against skills or job title)
+    if search_data.keywords:
+        # Using regex to make it case-insensitive
+        regex_pattern = re.compile(search_data.keywords, re.IGNORECASE)
+        query["$or"] = [
+            {"skills": {"$regex": regex_pattern}},
+            {"title": {"$regex": regex_pattern}}
+        ]
+        
+    # 2. City / Region Search
+    if search_data.city:
+        query["location_name"] = {"$regex": re.compile(search_data.city, re.IGNORECASE)}
+        
+    # 3. Experience Range
+    if search_data.min_experience is not None or search_data.max_experience is not None:
+        query["total_experience"] = {}
+        if search_data.min_experience is not None:
+            query["total_experience"]["$gte"] = search_data.min_experience
+        if search_data.max_experience is not None:
+            query["total_experience"]["$lte"] = search_data.max_experience
+            
+    # 4. Salary Range (Assuming your Employee model tracks expected salary)
+    if search_data.min_salary is not None or search_data.max_salary is not None:
+        query["expected_salary"] = {}
+        if search_data.min_salary is not None:
+            query["expected_salary"]["$gte"] = search_data.min_salary
+        if search_data.max_salary is not None:
+            query["expected_salary"]["$lte"] = search_data.max_salary
+            
+    # 5. Education Levels
+    if search_data.education_levels and len(search_data.education_levels) > 0:
+        query["education"] = {"$in": search_data.education_levels}
+        
+    # Execute the query (limit to 50 results to prevent massive payloads)
+    results = await Employee.find(query).limit(50).to_list()
+    
+    return results
+
+# =====================================================================
+# EMPLOYER-ONLY WORKER DISCOVERY
+# =====================================================================
+
+@router.get("/employee-search", response_model=List[dict])
+async def search_employees(
     category: Optional[str] = None,
     location: Optional[str] = None,
     min_experience: int = 0,
@@ -297,7 +411,11 @@ async def search_workers(
         "rate": getattr(w, "daily_rate", None), "rating": getattr(w, "rating", 0.0) 
     } for w in workers]
 
-@router.post("/unlock-worker/{worker_id}")
+#=====================================================================
+# CONTACT UNLOCKS
+#====================================================================
+
+@router.post("/unlock-employee/{worker_id}")
 async def unlock_worker_contact(worker_id: str, current_employer: Employer = Depends(get_current_employer)):
     await SubscriptionService.check_quota(str(current_employer.id), action_type="contact_view")
     worker = await Employee.get(PydanticObjectId(worker_id))
@@ -308,6 +426,44 @@ async def unlock_worker_contact(worker_id: str, current_employer: Employer = Dep
     await unlock_record.insert()
 
     return {"name": worker.name, "phone": worker.phone, "message": "Contact unlocked!"}
+
+#=====================================================================
+# SAVED SEARCHES
+#====================================================================
+
+@router.post("/database/saved-searches", response_model=SavedSearchResponse)
+async def save_candidate_search(
+    save_data: SavedSearchCreate,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Saves a search query for later use."""
+    new_saved_search = SavedSearch(
+        employer_id=str(current_employer.id),
+        title=save_data.title,
+        filters=save_data.filters.model_dump(exclude_unset=True)
+    )
+    await new_saved_search.insert()
+    
+    # Map for response
+    response_data = new_saved_search.model_dump()
+    response_data["id"] = str(new_saved_search.id)
+    return response_data
+
+
+@router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
+async def get_saved_searches(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Retrieves all saved searches for the current employer."""
+    searches = await SavedSearch.find({"employer_id": str(current_employer.id)}).sort("-created_at").to_list()
+    
+    response = []
+    for search in searches:
+        search_dict = search.model_dump()
+        search_dict["id"] = str(search.id)
+        response.append(search_dict)
+        
+    return response
 
 
 # =====================================================================
@@ -442,4 +598,130 @@ async def update_employer_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_employer.phone
+    }
+
+from fastapi import APIRouter, Depends
+from typing import List
+from app.api.dependencies import get_current_employer
+from app.models.employer import Employer
+from app.models.transaction import Transaction
+from app.models.payment import Payment
+from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
+
+# ==========================================
+# CREDITS & USAGE (Virtual Coins Ledger)
+# ==========================================
+
+@router.get("/credits/transactions", response_model=List[TransactionResponse])
+async def get_credit_transactions(
+    # Optional filter to match frontend tabs (Coins added, Coins spent, etc.)
+    tab_filter: Optional[str] = None, 
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Fetches the coin transaction history for the Credits & Usage tab."""
+    query = {"employer_id": str(current_employer.id)}
+    
+    # Map frontend tab clicks to database transaction types
+    if tab_filter == "added":
+        query["transaction_type"] = "added"
+    elif tab_filter == "spent":
+        query["transaction_type"] = "spent"
+    elif tab_filter == "returned":
+        query["transaction_type"] = "returned"
+        
+    transactions = await Transaction.find(query).sort("-created_at").to_list()
+    
+    response = []
+    for txn in transactions:
+        txn_dict = txn.model_dump()
+        txn_dict["id"] = str(txn.id)
+        # Format the description string safely
+        txn_dict["amount"] = f"+ {txn.amount}" if txn.amount > 0 else f"- {abs(txn.amount)}"
+        response.append(txn_dict)
+        
+    return response
+
+# ==========================================
+# BILLING HISTORY (Real Money Purchases)
+# ==========================================
+
+@router.get("/billing/history", response_model=List[PaymentResponse])
+async def get_billing_history(
+    status_filter: Optional[str] = None, # "success", "pending", "failed"
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Fetches the real-world purchase history for the Billing tab."""
+    query = {"employer_id": str(current_employer.id)}
+    
+    if status_filter and status_filter.lower() != "all":
+        query["status"] = status_filter.lower()
+        
+    payments = await Payment.find(query).sort("-created_at").to_list()
+    
+    response = []
+    for payment in payments:
+        pay_dict = payment.model_dump()
+        pay_dict["id"] = str(payment.id)
+        response.append(pay_dict)
+        
+    return response
+
+# ==========================================
+# UPDATE BILLING PROFILE (GSTIN)
+# ==========================================
+
+@router.put("/billing/profile")
+async def update_billing_profile(
+    profile_data: BillingProfileUpdateRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Updates the employer's GSTIN and billing address."""
+    if profile_data.gstin is not None:
+        current_employer.gstin = profile_data.gstin
+    if profile_data.billing_address is not None:
+        current_employer.billing_address = profile_data.billing_address
+        
+    await current_employer.save()
+    
+    return {"message": "Billing profile updated successfully", "gstin": current_employer.gstin}
+
+# ==========================================
+# REFERRAL DASHBOARD
+# ==========================================
+
+@router.get("/refer", response_model=ReferralDashboardResponse)
+async def get_referral_dashboard(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Provides data for the Refer & Earn frontend tab.
+    """
+    # Check if the field exists using getattr
+    current_code = getattr(current_employer, "referral_code", None)
+
+    if not current_code:
+        # Generate the new code
+        new_code = generate_referral_code()
+        
+        # 100% bypasses Pydantic by sending a raw PyMongo update command
+        await current_employer.update({"$set": {"referral_code": new_code}})
+        
+        current_code = new_code
+
+    # Count how many users have signed up using this employer's code
+    total_referred = await Employer.find(
+        {"referred_by_code": current_code}
+    ).count()
+    
+    # Calculate total coins earned from referrals using the Transaction ledger
+    referral_transactions = await Transaction.find(
+        {"employer_id": str(current_employer.id), "title": "Referral Bonus"}
+    ).to_list()
+    
+    total_coins = sum(txn.amount for txn in referral_transactions)
+    
+    return {
+        "referral_code": current_code,
+        "total_referred": total_referred,
+        "total_coins_earned": total_coins
     }

@@ -19,7 +19,8 @@ from app.models.partner import Partner
 from app.models.promo import PromoCode
 from app.models.notification import Notification
 from app.models.transaction import Transaction
-from app.models.application import JobApplication 
+from app.models.application import JobApplication
+from app.models.saved_search import SavedSearch
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,8 @@ async def connect_to_mongo():
             PromoCode,        
             Partner,
             ContactUnlock,
-            Transaction
+            Transaction,
+            SavedSearch
         ]
     )
     logger.info(f"Successfully connected to {settings.DATABASE_NAME} and initialized Beanie.")

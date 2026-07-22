@@ -390,7 +390,7 @@ async def apply_for_job(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Job ID format")
 
-    if not job or not job.is_active:
+    if not job or job.status != "published":
         raise HTTPException(status_code=404, detail="Job not found or inactive.")
 
     existing_application = await JobApplication.find_one({
@@ -419,12 +419,20 @@ async def apply_for_job(
 
 # --- Profile Management ---
 
-@router.get("/me", response_model=EmployeeResponse)
+@router.get("/me")
 async def read_employee_me(current_employee: Employee = Depends(get_current_employee)):
     """
-    Get current logged-in employee profile.
+    Fetches the currently logged-in employee's full profile.
     """
-    return current_employee
+    # Convert the Beanie/Pydantic document to a dictionary
+    employee_data = current_employee.model_dump()
+    
+    # Explicitly convert the MongoDB ObjectId to a string
+    employee_data["id"] = str(current_employee.id)
+    
+    # If nested objects are models, model_dump() handles them, 
+    # but returning the dictionary directly bypasses strict validation mismatches.
+    return employee_data
 
 @router.patch("/me/phone", status_code=status.HTTP_200_OK)
 async def update_employee_phone(

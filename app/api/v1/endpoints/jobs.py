@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from bson import ObjectId
 import pymongo
 
-from app.models.job import Job, SalaryRange
+from app.models.job import Job, SalaryRange, JobStatus
 from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
-from app.schemas.job import JobCreateRequest, JobResponse
+from app.models.application import JobApplication
+from app.schemas.job import JobCreateRequest, JobResponse, JobDashboardResponse
 from app.api.dependencies import get_current_employer, get_current_employee
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService 
@@ -232,6 +233,61 @@ async def get_single_job(job_id: str):
     return job
 
 # =====================================================================
+# EMPLOYER DASHBOARD: JOBS WITH MATCHMAKING & APPLICANTS
+# =====================================================================
+
+@router.get("/filter", response_model=List[JobDashboardResponse])
+async def get_employer_dashboard_jobs(
+    status: Optional[JobStatus] = Query(None, description="Filter jobs by status"),
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Filter and retrieve jobs for the employer dashboard, including counts of applicants and database matches.
+    """
+    # 1. Base query: Get jobs belonging to this specific employer
+    query = {"employer_id": str(current_employer.id)}
+    
+    # 2. Apply filtering if the frontend clicked a specific tab (e.g., "Active" / "Expired")
+    if status:
+        query["status"] = status
+        
+    # Fetch the jobs, sorting by newest first
+    jobs = await Job.find(query).sort("-posted_at").to_list()
+    
+    response_jobs = []
+    
+    # 3. Calculate Matchmaking & Applicants for each job
+    for job in jobs:
+        # ---- MATCHMAKING LOGIC ----
+        match_query = {}
+        
+        # Match candidates in the exact same city
+        if job.location_name:
+            match_query["location_name"] = job.location_name
+            
+        # Match candidates who possess at least ONE of the required skills
+        if job.skills and len(job.skills) > 0:
+            # $in is a MongoDB operator that checks if any of the candidate's skills match the job's skills
+            match_query["skills"] = {"$in": job.skills} 
+            
+        # Count how many employees in the database fit this criteria
+        matches_count = await Employee.find(match_query).count()
+        
+        # ---- APPLICANT LOGIC ----
+        # Count how many applications exist for this specific job_id
+        applied_count = await JobApplication.find({"job_id": str(job.id)}).count()
+        
+        # 4. Construct the final response object
+        job_dict = job.model_dump()
+        job_dict["id"] = str(job.id)
+        job_dict["database_matches"] = matches_count
+        job_dict["applied_count"] = applied_count
+        
+        response_jobs.append(job_dict)
+        
+    return response_jobs
+
+# =====================================================================
 # DATABASE MAINTENANCE (ADMIN TOOLS)
 # =====================================================================
 
@@ -266,3 +322,4 @@ async def force_create_indexes():
             "message": "FAILED to build index. There is bad data in your database blocking it.",
             "error_details": str(e)
         }
+

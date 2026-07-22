@@ -14,8 +14,10 @@ from app.models.auth import OTP, TokenBlacklist
 from app.core.security import create_access_token
 from app.models.employee import Employee
 
-# --- IMPORT OUR NEW SERVICE ---
+# --- IMPORT OUR NEW SERVICES & MODELS ---
 from app.services.otp import OTPService
+from app.utils.referral import generate_referral_code
+from app.models.transaction import Transaction, TransactionType, TransactionStatus
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -44,6 +46,7 @@ class PublicVerifyRequest(BaseModel):
     identifier: str = Field(..., description="Mobile number (Primary) or Email (Secondary)")
     otp_code: str = Field(..., description="Primary authentication method")
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
+    referred_by_code: Optional[str] = None  # <-- Added for the Referral System
 
 # ==============================================================================
 # 1. ADMIN AUTHENTICATION
@@ -56,15 +59,11 @@ async def request_admin_otp(data: AdminOTPRequest):
     if not existing_admin:
         raise HTTPException(status_code=404, detail="Admin account not found.")
     
-    # Unpack both the destination type and the OTP code from the service
     dest_type, otp_code = await OTPService.generate_and_send_otp(clean_phone, "admin", existing_admin)
     
     response = {"message": "Admin OTP Sent"}
-    
-    # --- 🔖 BOOKMARK: TESTING ONLY ---
     if getattr(settings, "DEBUG", False):
         response["test_otp"] = otp_code
-    # ---------------------------------
         
     return response
 
@@ -105,15 +104,11 @@ async def request_signup_otp(data: RequestSignupOTP, request: Request):
     if user:
         raise HTTPException(status_code=409, detail="This number is already registered. Please go to Login.")
 
-    # Unpack both the destination type and the OTP code from the service
     dest_type, otp_code = await OTPService.generate_and_send_otp(data.identifier, app_role, user=None, name=data.name)
     
     response = {"message": f"OTP sent to your {dest_type}. Phone number available for registration."}
-    
-    # --- 🔖 BOOKMARK: TESTING ONLY ---
     if getattr(settings, "DEBUG", False):
         response["test_otp"] = otp_code
-    # ---------------------------------
         
     return response
 
@@ -154,22 +149,56 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
         new_user = Employee(
             phone=clean_phone,
             name=saved_name,
-            # Note: category, location, etc. must be Optional in your Employee model!
             is_active=True
         )
+        await new_user.insert()
     else:
         new_user = Employer(
             phone=clean_phone,
             name=saved_name,
             is_active=True,
             employer_type=EmployerType.COMPANY, 
-            subscription_tier=SubscriptionTier.FREE
+            subscription_tier=SubscriptionTier.FREE,
+            referral_code=generate_referral_code() # Generate their code
         )
-    
-    # Save to MongoDB
-    await new_user.insert()
+        
+        # Check if they used a friend's referral code
+        referrer = None
+        if data.referred_by_code:
+            referrer = await Employer.find_one({"referral_code": data.referred_by_code})
+            if referrer:
+                new_user.referred_by_code = data.referred_by_code
+                new_user.available_credits = 50  # Give new user a 50 coin head start!
 
-    # 5. Issue the PERMANENT Access Token
+        # Save the new employer to the database
+        await new_user.insert()
+
+        # Process the rewards via our Ledger!
+        if referrer:
+            # Reward the Referrer
+            referrer.available_credits += 50
+            await referrer.save()
+            
+            await Transaction(
+                employer_id=str(referrer.id),
+                amount=50,
+                transaction_type=TransactionType.ADDED,
+                title="Referral Bonus",
+                description="Bonus for referring a new employer.",
+                status=TransactionStatus.SUCCESS
+            ).insert()
+
+            # Record the bonus for the New Employer
+            await Transaction(
+                employer_id=str(new_user.id),
+                amount=50,
+                transaction_type=TransactionType.ADDED,
+                title="Welcome Bonus",
+                description=f"Referred by {getattr(referrer, 'company_name', None) or 'a friend'}.",
+                status=TransactionStatus.SUCCESS
+            ).insert()
+
+    # Issue the PERMANENT Access Token
     access_token = create_access_token(
         subject=str(new_user.id), 
         user_type=app_role
@@ -208,17 +237,11 @@ async def request_login_otp(data: PublicOTPRequest, request: Request):
         if datetime.utcnow() - user.last_otp_requested_at < timedelta(seconds=60):
             raise HTTPException(status_code=429, detail="Please wait 60 seconds.")
 
-    # Unpack both the destination type and the OTP code from the service
     dest_type, otp_code = await OTPService.generate_and_send_otp(data.identifier, app_role, user)
     
     response = {"message": f"OTP sent to your {dest_type}."}
-    
-    # --- 🔖 BOOKMARK: TESTING ONLY ---
-    # This exposes the OTP to the frontend for easy testing without SMS credits.
-    # You do NOT need to delete this for production, just set DEBUG=False in your .env file!
     if getattr(settings, "DEBUG", False):
         response["test_otp"] = otp_code
-    # ---------------------------------
         
     return response
 

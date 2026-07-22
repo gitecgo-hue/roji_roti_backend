@@ -3,6 +3,10 @@ from typing import Optional, List
 from datetime import datetime
 from app.models.employer import EmployerType, SubscriptionTier
 
+#==========================================
+# EMPLOYER SCHEMAS
+#=========================================
+
 class EmployerCreate(BaseModel):
     """Schema for Employer Registration."""
     phone: str = Field(..., min_length=10, max_length=15, description="Mobile number with country code")
@@ -56,3 +60,24 @@ class EmployerDashboardResponse(BaseModel):
     contacts_viewed: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+class EmployerPersonalProfileUpdate(BaseModel):
+    """Schema for updating the individual user's details"""
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    # Note: We usually don't include 'phone' here because changing a 
+    # phone number requires a new OTP verification flow.
+
+class EmployerCompanyProfileUpdate(BaseModel):
+    """Schema for updating the business details"""
+    company_name: Optional[str] = None
+    industry: Optional[str] = None
+    company_size: Optional[str] = None
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    location: Optional[str] = None
+
+class ReferralDashboardResponse(BaseModel):
+    referral_code: str
+    total_referred: int
+    total_coins_earned: int
