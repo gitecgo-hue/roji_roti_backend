@@ -24,6 +24,7 @@ class Employer(Document):
     phone: Indexed(str, unique=True)
     phone_verified: bool = False
     email: Optional[EmailStr] = None
+    email_verified: bool = False  # <--- ADDED HERE
     hashed_password: Optional[str] = None
     
     # --- Company Details ---
@@ -35,6 +36,11 @@ class Employer(Document):
     # --- Industry & Size ---
     industry: Optional[str] = None
     company_size: Optional[str] = Field(None, description="e.g., '1-10', '50-200'")
+    founded_year: Optional[str] = None
+    website: Optional[str] = None
+    company_type: Optional[str] = None
+    social_profiles: Optional[dict] = None
+    
     # Add these inside your Employer class
     gstin: Optional[str] = None
     billing_address: Optional[str] = None

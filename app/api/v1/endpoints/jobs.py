@@ -3,21 +3,33 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Background
 from fastapi.responses import StreamingResponse, RedirectResponse 
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
+from beanie import PydanticObjectId
 from bson import ObjectId
 import pymongo
 
+# ---- Import Models ---
 from app.models.job import Job, SalaryRange, JobStatus
 from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
 from app.models.application import JobApplication
+
+# --- Import Config ---
+from app.core.config import settings
+
+# --- Import Schemas ---
 from app.schemas.job import JobCreateRequest, JobResponse, JobDashboardResponse
+
+# --- Import Dependencies ---
 from app.api.dependencies import get_current_employer, get_current_employee
+
+# --- Import Services ---
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService 
 from app.services.webhooks import WebhookService
 from app.services.notifications import NotificationService 
+
+# --- Import Utilities ---
 from app.utils.geocoding import get_coordinates_from_name 
-from beanie import PydanticObjectId
 
 router = APIRouter()
 
@@ -133,6 +145,9 @@ async def get_worker_home_feed(
 
     return feed_items
 
+# =====================================================================
+# WORKER: JOB SEARCH (Advanced)
+# =====================================================================
 
 @router.post("/search", response_model=List[JobResponse])
 async def search_jobs(query: JobSearchQuery):
@@ -201,6 +216,9 @@ async def search_jobs(query: JobSearchQuery):
         
     return formatted_jobs
 
+# =====================================================================
+# SINGLE JOB DETAIL VIEW
+# =====================================================================
 
 @router.get("/{job_id}", response_model=Job, status_code=status.HTTP_200_OK)
 async def get_single_job(job_id: str):
@@ -290,8 +308,6 @@ async def get_employer_dashboard_jobs(
 # =====================================================================
 # DATABASE MAINTENANCE (ADMIN TOOLS)
 # =====================================================================
-
-from app.core.config import settings
 
 @router.get("/fix-db-indexes")
 async def force_create_indexes():

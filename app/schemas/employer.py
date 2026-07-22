@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, model_validator, ConfigDict
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import datetime
 from app.models.employer import EmployerType, SubscriptionTier
 
@@ -65,6 +65,7 @@ class EmployerPersonalProfileUpdate(BaseModel):
     """Schema for updating the individual user's details"""
     name: Optional[str] = None
     email: Optional[EmailStr] = None
+    gstin: Optional[str] = None
     # Note: We usually don't include 'phone' here because changing a 
     # phone number requires a new OTP verification flow.
 
@@ -73,9 +74,13 @@ class EmployerCompanyProfileUpdate(BaseModel):
     company_name: Optional[str] = None
     industry: Optional[str] = None
     company_size: Optional[str] = None
+    company_type: Optional[str] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
     location: Optional[str] = None
+    founded_year: Optional[str] = None
+    website: Optional[str] = None
+    social_profiles: Optional[Dict[str, str]] = None
 
 class ReferralDashboardResponse(BaseModel):
     referral_code: str

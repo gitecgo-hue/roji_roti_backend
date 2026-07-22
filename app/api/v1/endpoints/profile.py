@@ -1,10 +1,18 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from bson import ObjectId
+
+# --- Import Services ---
 from app.utils.storage import StorageService
+
+# --- Import Models ---
 from app.models.employee import Employee
 from app.models.employer import Employer
 
 router = APIRouter()
+
+# =====================================================================
+# --- 3. UPLOAD PROFILE PICTURE ---   
+# =====================================================================
 
 @router.post("/{user_type}/{user_id}/upload-photo")
 async def upload_profile_picture(

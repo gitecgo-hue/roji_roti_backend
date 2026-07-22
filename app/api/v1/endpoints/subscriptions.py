@@ -1,10 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+
+# --- Import Models ---
 from app.models.employer import Employer
 from app.models.subscriptions import Subscription
+
+# --- Import Services ---
 from app.services.subscriptions import SubscriptionService
+
+# --- Import Dependencies ---
 from app.api.dependencies import get_current_employer
 
 router = APIRouter()
+
+### =====================================================================
+### --- 1. GET SUBSCRIPTION STATUS ---
+### =====================================================================
 
 @router.get("/status")
 async def get_subscription_status(

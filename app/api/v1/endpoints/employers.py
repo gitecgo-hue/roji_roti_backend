@@ -1,3 +1,4 @@
+# --- IMPORTS ---
 from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
@@ -16,21 +17,27 @@ from app.api.dependencies import get_current_employer
 from app.models.employer import Employer, EmployerType, SubscriptionTier 
 from app.models.employee import Employee
 from app.models.subscriptions import Subscription
+from app.models.transaction import Transaction
 from app.models.notification import Notification
 from app.models.contact import ContactUnlock
+from app.models.payment import Payment
 from app.models.review import Review 
 from app.models.job import Job  
 from app.models.auth import OTP
 from app.models.saved_search import SavedSearch
 from app.models.application import JobApplication, ApplicationStatus
+
+# --- Service Imports ---
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
 from app.schemas.employer import EmployerDashboardResponse
 from app.schemas.search import CandidateSearchRequest
 from app.schemas.search import SavedSearchCreate, SavedSearchResponse
-from app.schemas.employer import EmployerPersonalProfileUpdate, EmployerCompanyProfileUpdate
-from app.schemas.employer import ReferralDashboardResponse
+from app.schemas.employer import EmployerPersonalProfileUpdate, EmployerCompanyProfileUpdate, ReferralDashboardResponse
+from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
+
+# --- Utility Imports ---
 from app.utils.referral import generate_referral_code
 from app.utils.maps import MapService
 
@@ -196,22 +203,24 @@ async def update_personal_profile(
 ):
     """
     Updates the individual recruiter/owner's personal details.
-    Triggered from the 'View profile' frontend screen.
     """
-    # Only update fields that were actually provided in the request
-    if profile_data.name is not None:
-        current_employer.name = profile_data.name
+    update_dict = profile_data.model_dump(exclude_unset=True)
+    
+    # If they change their email, we must mark it as unverified again
+    if "email" in update_dict and update_dict["email"] != current_employer.email:
+        current_employer.email_verified = False
         
-    if profile_data.email is not None:
-        # Optional: Add logic here to check if the email is already in use by another account
-        current_employer.email = profile_data.email
-
+    for field, value in update_dict.items():
+        setattr(current_employer, field, value)
+        
     await current_employer.save()
     
     return {
         "message": "Personal profile updated successfully",
         "name": current_employer.name,
-        "email": current_employer.email
+        "email": current_employer.email,
+        "email_verified": current_employer.email_verified,
+        "gstin": getattr(current_employer, "gstin", None)
     }
 
 # ==========================================
@@ -225,9 +234,7 @@ async def update_company_profile(
 ):
     """
     Updates the business details.
-    Triggered from the 'Company profile' frontend screen.
     """
-    # Using a dynamic update loop for cleaner code
     update_dict = company_data.model_dump(exclude_unset=True)
     
     for field, value in update_dict.items():
@@ -237,9 +244,24 @@ async def update_company_profile(
     
     return {
         "message": "Company profile updated successfully",
-        "company_name": current_employer.company_name,
-        "is_profile_complete": bool(current_employer.company_name and current_employer.industry)
+        "company_name": current_employer.company_name
     }
+
+# ==========================================
+# personal & company profile retrieval
+# =========================================
+
+@router.get("/me")
+async def get_current_employer_profile(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Returns the full employer document so the frontend can populate 
+    both the Personal and Company profile screens.
+    """
+    employer_dict = current_employer.model_dump()
+    employer_dict["id"] = str(current_employer.id)
+    return employer_dict
 
 # =====================================================================
 # CORE RECRUITMENT FLOW (ATS)
@@ -599,14 +621,6 @@ async def update_employer_phone(
         "message": "Phone number successfully updated.", 
         "new_phone": current_employer.phone
     }
-
-from fastapi import APIRouter, Depends
-from typing import List
-from app.api.dependencies import get_current_employer
-from app.models.employer import Employer
-from app.models.transaction import Transaction
-from app.models.payment import Payment
-from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
 
 # ==========================================
 # CREDITS & USAGE (Virtual Coins Ledger)

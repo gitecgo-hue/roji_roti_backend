@@ -1,3 +1,5 @@
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Request, BackgroundTasks
+from bson import ObjectId
 import json
 import hmac
 import hashlib
@@ -6,16 +8,21 @@ from typing import Optional
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
+# --- Import Razorpay SDK ---
 import razorpay
-from fastapi import APIRouter, Depends, HTTPException, Response, status, Request, BackgroundTasks
-from bson import ObjectId
 
-# --- Models & Services ---
+# --- Models ---
 from app.core.config import settings
+
+# --- Import Schemas ---
 from app.api.dependencies import get_current_employer, get_current_user
+
+# --- Import Models ---
 from app.models.employer import Employer 
 from app.models.transaction import Transaction
 from app.models.subscriptions import Subscription
+
+# --- Import Services ---
 from app.services.promotions import PromotionService 
 from app.services.receipt import ReceiptService
 
@@ -139,7 +146,6 @@ async def create_subscription_order(
             raise HTTPException(status_code=401, detail="Razorpay authentication failed.")
         raise HTTPException(status_code=502, detail=f"Razorpay Error: {str(e)}")
 
-
 @router.post("/verify", status_code=status.HTTP_200_OK)
 async def verify_subscription_payment(
     request: PaymentVerificationRequest,
@@ -192,6 +198,9 @@ async def verify_subscription_payment(
         "transaction_id": str(transaction.id)
     }
 
+# =====================================================================
+# --- 3.1 DOWNLOAD RECEIPT ---  
+# =====================================================================
 
 @router.get("/transactions/{transaction_id}/receipt")
 async def download_receipt(

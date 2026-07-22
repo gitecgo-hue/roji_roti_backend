@@ -2,9 +2,12 @@ from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from pydantic import ValidationError
-from bson import ObjectId  # <--- Added Import for ID validation
+from bson import ObjectId
 
+# --- Import Config ---
 from app.core.config import settings
+
+# --- Import Models ---
 from app.models.employer import Employer
 from app.models.employee import Employee
 from app.models.admin import Admin 

@@ -3,9 +3,12 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
+# --- Import Models ---
 from app.models.rating import Rating
 from app.models.employee import Employee
 from app.models.employer import Employer
+
+# --- Import Dependencies ---
 from app.api.dependencies import get_current_employer
 
 router = APIRouter()

@@ -1,3 +1,4 @@
+# --- IMPORTS ---
 import re
 import random
 from typing import List, Optional
@@ -263,6 +264,8 @@ async def get_job_feed():
         
     return active_jobs
 
+# --- Smart Recommendations ---
+
 @router.get("/recommendations")
 async def get_smart_job_recommendations(
     radius_km: int = 15,
@@ -300,6 +303,8 @@ async def get_smart_job_recommendations(
         "jobs": formatted_jobs
     }
 
+# --- Nearby Jobs & Geospatial Queries ---
+
 @router.get("/nearby-jobs")
 async def get_nearby_jobs(
     radius_km: float = 5.0,
@@ -335,6 +340,8 @@ async def get_nearby_jobs(
         "created_at": j.created_at
     } for j in nearby_jobs]
 
+# --- Reviews & Feedback ---
+
 @router.get("/{worker_id}/reviews", response_model=List[dict])
 async def get_worker_reviews(worker_id: str):
     """
@@ -352,6 +359,8 @@ async def get_worker_reviews(worker_id: str):
         "comment": r.comment,
         "date": r.created_at
     } for r in reviews]
+
+# --- Geocoding & Reverse Geocoding ---
 
 @router.get("/reverse-geocode")
 async def get_address_from_gps(lat: float, lng: float):
@@ -434,6 +443,8 @@ async def read_employee_me(current_employee: Employee = Depends(get_current_empl
     # but returning the dictionary directly bypasses strict validation mismatches.
     return employee_data
 
+# --- Profile Updates ---
+
 @router.patch("/me/phone", status_code=status.HTTP_200_OK)
 async def update_employee_phone(
     data: UpdatePhoneRequest,
@@ -477,6 +488,8 @@ async def update_employee_phone(
         "message": "Phone number successfully updated.", 
         "new_phone": current_worker.phone
     }
+
+# --- Resume Upload & Parsing ---
 
 @router.post("/me/upload-resume", status_code=status.HTTP_200_OK)
 async def upload_and_parse_resume(
@@ -548,6 +561,8 @@ async def upload_and_parse_resume(
         }
     }
 
+# --- KYC Verification & Document Upload ---
+
 @router.post("/me/verify-kyc")
 async def verify_worker_kyc(
     id_type: str = Form(..., description="Must be 'AADHAAR' or 'PAN'"),
@@ -612,6 +627,8 @@ async def verify_worker_kyc(
         "message": "Identity successfully verified! Your account is now active.",
         "verified_name": verification_result["extracted_name"]
     }
+
+# - -- Profile Photo Upload ---
 
 @router.post("/upload-photo", status_code=status.HTTP_200_OK)
 async def update_profile_photo(
@@ -691,6 +708,8 @@ async def search_employees(
     
     employees = await Employee.find(query).to_list()
     return employees
+
+# --- Resume Download ---
 
 @router.get("/resume/download/{employee_id}")
 async def download_employee_resume(
