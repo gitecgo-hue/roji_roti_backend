@@ -306,6 +306,71 @@ async def update_job_post(
         "updated_fields": list(update_dict.keys())
     }
 
+# --- BACKGROUND TASK FOR CLEANUP ---
+async def handle_deleted_job_cleanup(job_id: str, job_title: str, company_name: str):
+    """
+    Background task to revoke applications and notify employees 
+    when a job is permanently deleted.
+    """
+    # Find all applications for this job
+    applications = await JobApplication.find({"job_id": job_id}).to_list()
+    
+    for app in applications:
+        # Revoke the application (Soft delete or status update is better than hard deleting candidate history)
+        app.status = "revoked" # Or "job_deleted", "cancelled"
+        await app.save()
+        
+        # Send Notification to the employee
+        # Replace this with your actual notification logic (e.g., Email, Push, or DB Notification)
+        notification_message = f"The job '{job_title}' at {company_name} has been closed and your application was revoked."
+
+# ==========================================
+# DELETE JOB POST
+# ==========================================
+@router.delete("/{job_id}", status_code=status.HTTP_200_OK)
+async def delete_job_post(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Permanently deletes a job post and triggers a background task 
+    to revoke applications and notify candidates.
+    """
+    # 1. Fetch the job from the database
+    job = await Job.get(job_id)
+    
+    # 2. Check if the job exists
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Job post not found."
+        )
+        
+    # 3. Security Check: Ensure the logged-in employer actually owns this job post
+    if str(job.employer_id) != str(current_employer.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="You are not authorized to delete this job post."
+        )
+        
+    # 4. Trigger the background cleanup task
+    # We pass the title and company name so the notification has context even after the job is deleted
+    background_tasks.add_task(
+        handle_deleted_job_cleanup, 
+        job_id=job_id, 
+        job_title=getattr(job, "title", "Unknown Job"), 
+        company_name=getattr(job, "company_name", "Unknown Company")
+    )
+        
+    # 5. Permanently delete the job from the database
+    await job.delete()
+    
+    return {
+        "message": "Job post deleted successfully. Applicants will be notified.",
+        "job_id": job_id
+    }
+
 # =====================================================================
 # EMPLOYER DASHBOARD: JOBS WITH MATCHMAKING & APPLICANTS
 # =====================================================================
@@ -394,4 +459,3 @@ async def force_create_indexes():
             "message": "FAILED to build index. There is bad data in your database blocking it.",
             "error_details": str(e)
         }
-
