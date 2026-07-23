@@ -16,7 +16,6 @@ from app.core.security import verify_password
 from app.api.dependencies import get_current_employee, get_current_employer
 
 # --- Schema Imports ---
-from app.models.employer import Employer
 from app.schemas.employee import (
     EmployeeProfileUpdate,
     EmployeeProfileUpdate,
@@ -30,6 +29,7 @@ from app.schemas.employee import (
 )
 
 # --- Models Imports ---
+from app.models.employer import Employer
 from app.models.employee import Employee, GeoLocation
 from app.models.application import JobApplication, ApplicationStatus
 from app.models.contact import ContactUnlock 

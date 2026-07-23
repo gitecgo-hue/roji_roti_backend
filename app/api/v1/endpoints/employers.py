@@ -2,10 +2,10 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
+from beanie import PydanticObjectId
 from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import List, Optional
-from beanie import PydanticObjectId
 import uuid
 import re
 
