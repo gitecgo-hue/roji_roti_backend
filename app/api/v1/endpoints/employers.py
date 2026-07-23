@@ -31,15 +31,23 @@ from app.models.application import JobApplication, ApplicationStatus
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
-from app.schemas.employer import EmployerDashboardResponse
-from app.schemas.search import CandidateSearchRequest
-from app.schemas.search import SavedSearchCreate, SavedSearchResponse
-from app.schemas.employer import EmployerPersonalProfileUpdate, EmployerCompanyProfileUpdate, ReferralDashboardResponse
-from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
 
 # --- Utility Imports ---
 from app.utils.referral import generate_referral_code
 from app.utils.maps import MapService
+
+# --- SCHEMA IMPORTS ---
+from app.schemas.employer import EmployerCompanyProfileResponse, EmployerDashboardResponse, EmployerPersonalProfileResponse
+from app.schemas.search import CandidateSearchRequest
+from app.schemas.search import SavedSearchCreate, SavedSearchResponse
+from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
+from app.schemas.employer import (
+    EmployerCompleteProfileRequest,
+    EmployerPersonalProfileResponse,
+    EmployerCompanyProfileResponse,
+    EmployerProfileUpdateRequest,
+    ReferralDashboardResponse
+)
 
 router = APIRouter()
 
@@ -79,7 +87,6 @@ class UpdatePhoneRequest(BaseModel):
 # =====================================================================
 # PROFILE COMPLETION & DASHBOARD 
 # =====================================================================
-
 @router.patch("/profile/complete", response_model=dict, status_code=status.HTTP_200_OK)
 async def complete_employer_profile(
     data: CompleteEmployerProfileRequest, 
@@ -87,45 +94,55 @@ async def complete_employer_profile(
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Completes the employer's profile after they have verified their phone number.
-    Requires the access_token received from the Auth endpoint.
+    Completes the employer's profile, including geocoding, password setup,
+    and subscription initialization via bulk dynamic updates.
     """
-    # 1. Check for email duplication (excluding current user)
-    existing_employer = await Employer.find_one({"email": data.email, "_id": {"$ne": current_employer.id}})
-    if existing_employer:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this email already exists."
-        )
+    # Convert the incoming data into a dictionary, ignoring any fields the frontend didn't send
+    update_dict = data.model_dump(exclude_unset=True)
+
+    # 1. Check for email duplication (excluding current user) & Handle Verification
+    if "email" in update_dict and update_dict["email"]:
+        existing_employer = await Employer.find_one({"email": update_dict["email"], "_id": {"$ne": current_employer.id}})
+        if existing_employer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An account with this email already exists."
+            )
+        
+        # If they update their email, reset the verification flag
+        if update_dict["email"] != getattr(current_employer, "email", None):
+            current_employer.email_verified = False
 
     # 2. Geocode Address via Ola Maps
-    coords = await MapService.get_coordinates(data.company_address)
-    formatted_address = data.company_address
-    location_geo = None
+    # Check for either 'company_address' or 'address' depending on how your schema is defined
+    address_field = update_dict.get("company_address") or update_dict.get("address")
+    if address_field:
+        coords = await MapService.get_coordinates(address_field)
+        if coords:
+            # Inject the formatted data back into the dictionary
+            update_dict["address"] = coords["formatted_address"]
+            update_dict["location"] = {
+                "type": "Point",
+                "coordinates": [coords["longitude"], coords["latitude"]]
+            }
+            # Clean up the old schema key if it was named 'company_address'
+            if "company_address" in update_dict:
+                del update_dict["company_address"]
 
-    if coords:
-        formatted_address = coords["formatted_address"]
-        location_geo = {
-            "type": "Point",
-            "coordinates": [coords["longitude"], coords["latitude"]]
-        }
+    # 3. Hash Password (if provided in the payload)
+    if "password" in update_dict:
+        # Remove the raw password from the dictionary and replace it with the hashed version
+        update_dict["hashed_password"] = get_password_hash(update_dict.pop("password"))
 
-    # 3. Hash Password & Update Employer
-    hashed_password = get_password_hash(data.password)
-    
-    current_employer.company_name = data.company_name
-    current_employer.email = data.email
-    current_employer.hashed_password = hashed_password
-    current_employer.address = formatted_address
-    current_employer.location = location_geo
-    current_employer.gstin = data.gstin
-    current_employer.industry = data.industry
-    current_employer.company_size = data.company_size
-    
+    # 4. Dynamically apply all finalized fields to the database model
+    for field, value in update_dict.items():
+        setattr(current_employer, field, value)
+        
     await current_employer.save()
 
-    # 4. Initialize Free Tier Subscription (Background Task)
+    # 5. Initialize Free Tier Subscription & Welcome Email (Background Task)
     async def setup_new_employer(emp_id: str, email: str, name: str):
+        # NOTE: You may want to add a check here to ensure a subscription doesn't already exist
         base_sub = Subscription(
             employer_id=emp_id,
             plan_type="free",
@@ -143,9 +160,19 @@ async def complete_employer_profile(
 
     background_tasks.add_task(setup_new_employer, str(current_employer.id), current_employer.email, current_employer.name)
 
+    # 6. Determine if the profile has enough data to be considered "complete"
+    is_profile_complete = bool(
+        getattr(current_employer, "name", None) and 
+        getattr(current_employer, "company_name", None) and 
+        getattr(current_employer, "email", None) and
+        getattr(current_employer, "industry", None)
+    )
+
     return {
         "status": "success",
         "message": "Employer profile completed successfully.",
+        "is_profile_complete": is_profile_complete,
+        "email_verified": getattr(current_employer, "email_verified", False),
         "employer": EmployerResponse(
             id=str(current_employer.id),
             owner_name=current_employer.name,
@@ -155,7 +182,9 @@ async def complete_employer_profile(
             is_verified=current_employer.is_verified
         )
     }
-
+# =========================================
+# EMPLOYER DASHBOARD
+# =========================================
 @router.get("/dashboard", response_model=EmployerDashboardResponse)
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
@@ -193,75 +222,71 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
     )
 
 # ==========================================
-# 1. UPDATE PERSONAL PROFILE
+# GET PERSONAL PROFILE
 # ==========================================
-
-@router.put("/profile_personal_update")
-async def update_personal_profile(
-    profile_data: EmployerPersonalProfileUpdate,
+@router.get("/profile/personal", response_model=EmployerPersonalProfileResponse)
+async def get_personal_profile(
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Updates the individual recruiter/owner's personal details.
+    Retrieves the individual recruiter/owner's personal details.
+    """
+    return current_employer
+
+# ==========================================
+# GET COMPANY PROFILE
+# ==========================================
+@router.get("/profile/company", response_model=EmployerCompanyProfileResponse)
+async def get_company_profile(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Retrieves the business/company details.
+    """
+    return current_employer
+
+# ==========================================
+# UPDATE PERSONAL & COMPANY PROFILE
+# ==========================================
+
+@router.put("/profile_update")
+async def update_employer_profile(
+    profile_data: EmployerProfileUpdateRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Updates both the individual recruiter/owner's personal details 
+    and the business/company details in a single request.
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # If they change their email, we must mark it as unverified again
-    if "email" in update_dict and update_dict["email"] != current_employer.email:
-        current_employer.email_verified = False
+    # 1. Check for email duplication (excluding current user)
+    if "email" in update_dict and update_dict["email"]:
+        existing_employer = await Employer.find_one({"email": update_dict["email"], "_id": {"$ne": current_employer.id}})
+        if existing_employer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An account with this email already exists."
+            )
+            
+        # 2. If they change their email, we must mark it as unverified again
+        if update_dict["email"] != current_employer.email:
+            current_employer.email_verified = False
         
+    # 3. Apply changes dynamically (handles both personal and company fields seamlessly)
     for field, value in update_dict.items():
         setattr(current_employer, field, value)
         
     await current_employer.save()
     
     return {
-        "message": "Personal profile updated successfully",
+        "message": "Profile updated successfully",
         "name": current_employer.name,
+        "company_name": current_employer.company_name,
         "email": current_employer.email,
-        "email_verified": current_employer.email_verified,
+        "email_verified": getattr(current_employer, "email_verified", False),
         "gstin": getattr(current_employer, "gstin", None)
     }
-
-# ==========================================
-# 2. UPDATE COMPANY PROFILE
-# ==========================================
-
-@router.put("/profile_company_update")
-async def update_company_profile(
-    company_data: EmployerCompanyProfileUpdate,
-    current_employer: Employer = Depends(get_current_employer)
-):
-    """
-    Updates the business details.
-    """
-    update_dict = company_data.model_dump(exclude_unset=True)
-    
-    for field, value in update_dict.items():
-        setattr(current_employer, field, value)
-        
-    await current_employer.save()
-    
-    return {
-        "message": "Company profile updated successfully",
-        "company_name": current_employer.company_name
-    }
-
-# ==========================================
-# personal & company profile retrieval
-# =========================================
-
-@router.get("/me")
-async def get_current_employer_profile(
-    current_employer: Employer = Depends(get_current_employer)
-):
-    """
-    Returns the full employer document so the frontend can populate 
-    both the Personal and Company profile screens.
-    """
-    employer_dict = current_employer.model_dump()
-    employer_dict["id"] = str(current_employer.id)
-    return employer_dict
 
 # =====================================================================
 # CORE RECRUITMENT FLOW (ATS)

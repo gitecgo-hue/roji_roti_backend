@@ -253,6 +253,55 @@ async def get_employee_dashboard(
         rating=getattr(current_employee, "rating", 0.0)
     )
 
+# --- Profile Management ---
+
+@router.get("/profile")
+async def read_employee_me(current_employee: Employee = Depends(get_current_employee)):
+    """
+    Fetches the currently logged-in employee's full profile.
+    """
+    # Convert the Beanie/Pydantic document to a dictionary
+    employee_data = current_employee.model_dump()
+    
+    # Explicitly convert the MongoDB ObjectId to a string
+    employee_data["id"] = str(current_employee.id)
+    
+    # If nested objects are models, model_dump() handles them, 
+    # but returning the dictionary directly bypasses strict validation mismatches.
+    return employee_data
+
+# - -- Profile Photo Upload ---
+
+@router.post("/profile_photo_upload", status_code=status.HTTP_200_OK)
+async def update_profile_photo(
+    file: UploadFile = File(...), 
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Uploads a profile picture and updates the worker's record.
+    """
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="File must be an image"
+        )
+
+    url = await StorageService.upload_image(file, folder="workers")
+    
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Cloud upload failed"
+        )
+    
+    current_employee.photo_url = url
+    await current_employee.save()
+    
+    return {
+        "message": "Profile photo updated successfully",
+        "photo_url": url
+    }
+
 # --- Profile Update ---
 @router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
@@ -284,23 +333,6 @@ async def update_employee_profile(
             getattr(current_employee, "total_experience", None)
         )
     }
-
-# --- Profile Management ---
-
-@router.get("/me")
-async def read_employee_me(current_employee: Employee = Depends(get_current_employee)):
-    """
-    Fetches the currently logged-in employee's full profile.
-    """
-    # Convert the Beanie/Pydantic document to a dictionary
-    employee_data = current_employee.model_dump()
-    
-    # Explicitly convert the MongoDB ObjectId to a string
-    employee_data["id"] = str(current_employee.id)
-    
-    # If nested objects are models, model_dump() handles them, 
-    # but returning the dictionary directly bypasses strict validation mismatches.
-    return employee_data
 
 # --- Discovery & Recommendations ---
 
@@ -664,37 +696,7 @@ async def verify_worker_kyc(
         "verified_name": verification_result["extracted_name"]
     }
 
-# - -- Profile Photo Upload ---
 
-@router.post("/upload-photo", status_code=status.HTTP_200_OK)
-async def update_profile_photo(
-    file: UploadFile = File(...), 
-    current_employee: Employee = Depends(get_current_employee)
-):
-    """
-    Uploads a profile picture and updates the worker's record.
-    """
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="File must be an image"
-        )
-
-    url = await StorageService.upload_image(file, folder="workers")
-    
-    if not url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Cloud upload failed"
-        )
-    
-    current_employee.photo_url = url
-    await current_employee.save()
-    
-    return {
-        "message": "Profile photo updated successfully",
-        "photo_url": url
-    }
 
 # --- Status & Visibility ---
 

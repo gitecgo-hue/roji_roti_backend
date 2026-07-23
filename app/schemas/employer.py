@@ -7,6 +7,7 @@ from app.models.employer import EmployerType, SubscriptionTier
 # EMPLOYER SCHEMAS
 #=========================================
 
+# --- Employer Registration & Profile Schemas ---
 class EmployerCreate(BaseModel):
     """Schema for Employer Registration."""
     phone: str = Field(..., min_length=10, max_length=15, description="Mobile number with country code")
@@ -33,8 +34,10 @@ class EmployerResponse(BaseModel):
     employer_type: EmployerType
     name: str
     company_name: Optional[str]
-    location: str
+    location: Optional[str] = None
     subscription_tier: SubscriptionTier
+    is_verified: Optional[bool] = False
+    email: Optional[EmailStr] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -61,28 +64,77 @@ class EmployerDashboardResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class EmployerPersonalProfileUpdate(BaseModel):
-    """Schema for updating the individual user's details"""
+# --- Employer Profile Completion Request (Used in PATCH /profile/complete) ---
+class EmployerCompleteProfileRequest(BaseModel):
+    """Schema for completing the employer's profile after registration."""
+    
+    # Personal Details
+    name: Optional[str] = Field(None, min_length=2, max_length=50)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None  # Needed for hashing on first setup
+    
+    # Company Details
+    company_name: Optional[str] = None
+    gstin: Optional[str] = None
+    industry: Optional[str] = None
+    company_size: Optional[str] = None
+    company_address: Optional[str] = None  # Used for Ola Maps Geocoding
+    address: Optional[str] = None
+    
+    # Additional UI fields
+    logo_url: Optional[str] = None
+    founded_year: Optional[str] = None
+    website: Optional[str] = None
+    company_type: Optional[str] = None
+    description: Optional[str] = None
+    social_profiles: Optional[Dict[str, str]] = None
+    
+    employer_type: Optional[EmployerType] = None
+
+# --- Unified Update Schema (Used in PUT /profile_update) ---
+class EmployerProfileUpdateRequest(BaseModel):
+    """Unified schema for updating both personal and company profiles"""
+    
+    # --- Personal Details ---
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     gstin: Optional[str] = None
-    # Note: We usually don't include 'phone' here because changing a 
-    # phone number requires a new OTP verification flow.
-
-class EmployerCompanyProfileUpdate(BaseModel):
-    """Schema for updating the business details"""
-    company_name: Optional[str] = None
-    industry: Optional[str] = None
-    company_size: Optional[str] = None
-    company_type: Optional[str] = None
-    description: Optional[str] = None
+    
+    # --- Company Details ---
     logo_url: Optional[str] = None
-    location: Optional[str] = None
+    company_name: Optional[str] = None
     founded_year: Optional[str] = None
     website: Optional[str] = None
+    company_size: Optional[str] = None
+    company_type: Optional[str] = None
+    industry: Optional[str] = None
+    description: Optional[str] = None
     social_profiles: Optional[Dict[str, str]] = None
+    address: Optional[str] = None
 
+# --- Specific Responses ---
 class ReferralDashboardResponse(BaseModel):
     referral_code: str
     total_referred: int
     total_coins_earned: int
+
+class EmployerPersonalProfileResponse(BaseModel):
+    """Schema for returning only the personal details"""
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: str
+    email_verified: bool
+    gstin: Optional[str] = None
+
+class EmployerCompanyProfileResponse(BaseModel):
+    """Schema for returning only the business details"""
+    company_name: Optional[str] = None
+    logo_url: Optional[str] = None
+    founded_year: Optional[str] = None
+    website: Optional[str] = None
+    company_size: Optional[str] = None
+    company_type: Optional[str] = None
+    industry: Optional[str] = None
+    description: Optional[str] = None
+    social_profiles: Optional[Dict[str, str]] = None
+    address: Optional[str] = None
