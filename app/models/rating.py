@@ -1,7 +1,7 @@
 from beanie import Document, Indexed
 from pydantic import Field, ConfigDict
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Rating(Document):
     """
@@ -27,3 +27,13 @@ class Rating(Document):
 
     class Settings:
         name = "ratings"  # Collection name in MongoDB
+
+class PlatformRating(Document):
+    user_id: str
+    user_type: str  # e.g., "employer" or "employee"
+    rating: int = Field(ge=1, le=5, description="Star rating from 1 to 5")
+    feedback: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "platform_ratings"

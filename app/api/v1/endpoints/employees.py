@@ -21,7 +21,9 @@ from app.schemas.employee import (
     AvailabilityUpdate,
     EmployeeKYCUpdate,
     EmployeeDashboardResponse,
-    WorkExperienceInput 
+    WorkExperienceInput,
+    AppliedJobResponse,
+    SavedJobResponse
 )
 
 # --- Models ---
@@ -47,6 +49,7 @@ from app.services.parser import ResumeParserService
 # --- Utilities ---
 from app.utils.storage import StorageService
 from app.utils.maps import MapService
+
 
 router = APIRouter()
 
@@ -348,6 +351,120 @@ async def get_job_feed():
         return {"message": "No active jobs found right now. Check back later!"}
         
     return active_jobs
+
+# --- Applied Jobs ---
+@router.get("/jobs/applied", response_model=List[AppliedJobResponse])
+async def get_applied_jobs(
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Retrieves a list of all jobs the current employee (job seeker) has applied for,
+    including the current status of the application and basic job details.
+    """
+    # 1. Find all application documents belonging to the current employee
+    applications = await JobApplication.find(
+        {"employee_id": str(current_employee.id)}
+    ).to_list()
+
+    if not applications:
+        return []
+
+    applied_jobs_data = []
+    
+    # 2. Loop through the applications to fetch the associated job details
+    for app in applications:
+        # Fetch the actual job document to get the title and company name
+        job = await Job.get(app.job_id)
+        
+        if job:
+            applied_jobs_data.append({
+                "application_id": str(app.id),
+                "job_id": str(job.id),
+                "job_title": getattr(job, "title", "Unknown Title"),
+                "company_name": getattr(job, "company_name", "Unknown Company"),
+                "status": getattr(app, "status", "pending"), 
+                "applied_at": getattr(app, "created_at", app.id.generation_time)
+            })
+
+    # 3. Return the compiled list to the frontend
+    return applied_jobs_data
+
+# ==========================================
+# SAVE A JOB
+# ==========================================
+@router.post("/jobs/{job_id}/save")
+async def save_job_for_later(
+    job_id: str,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Adds a job ID to the employee's saved jobs list.
+    """
+    # 1. Verify the job actually exists
+    job = await Job.get(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    # 2. Check if it's already saved to prevent duplicates
+    if job_id not in current_employee.saved_job_ids:
+        current_employee.saved_job_ids.append(job_id)
+        await current_employee.save()
+        return {"message": "Job saved successfully", "saved": True}
+        
+    return {"message": "Job is already saved", "saved": True}
+
+# ==========================================
+# UNSAVE A JOB
+# ==========================================
+@router.delete("/jobs/{job_id}/save")
+async def unsave_job(
+    job_id: str,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Removes a job ID from the employee's saved jobs list.
+    """
+    if job_id in current_employee.saved_job_ids:
+        current_employee.saved_job_ids.remove(job_id)
+        await current_employee.save()
+        return {"message": "Job removed from saved list", "saved": False}
+        
+    return {"message": "Job was not in saved list", "saved": False}
+
+# ==========================================
+# GET ALL SAVED JOBS
+# ==========================================
+@router.get("/jobs/saved", response_model=List[SavedJobResponse])
+async def get_saved_jobs(
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Retrieves the full details of all jobs the employee has saved.
+    """
+    if not current_employee.saved_job_ids:
+        return []
+
+    saved_jobs_data = []
+    
+    # Loop through the saved IDs and fetch the actual job documents
+    for job_id in current_employee.saved_job_ids:
+        job = await Job.get(job_id)
+        
+        # Only append it if the job still exists (hasn't been deleted by the employer)
+        if job:
+            saved_jobs_data.append({
+                "job_id": str(job.id),
+                "job_title": getattr(job, "title", "Unknown Title"),
+                "company_name": getattr(job, "company_name", "Unknown Company"),
+                "location": getattr(job, "location", "Not specified"),
+                "expected_salary": getattr(job, "salary", None) # Adjust field name to match your Job model
+            })
+        else:
+            # Optional: Clean up the database by removing IDs of jobs that no longer exist
+            current_employee.saved_job_ids.remove(job_id)
+            await current_employee.save()
+
+    return saved_jobs_data
 
 # --- Smart Recommendations ---
 

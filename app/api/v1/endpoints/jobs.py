@@ -17,7 +17,13 @@ from app.models.application import JobApplication
 from app.core.config import settings
 
 # --- Import Schemas ---
-from app.schemas.job import JobCreateRequest, JobResponse, JobDashboardResponse
+from app.schemas.job import (
+    JobCreateRequest,
+    JobResponse,
+    JobDashboardResponse,
+    JobUpdateRequest,
+    SalaryRangeInput
+)
 
 # --- Import Dependencies ---
 from app.api.dependencies import get_current_employer, get_current_employee
@@ -249,6 +255,56 @@ async def get_single_job(job_id: str):
         raise HTTPException(status_code=403, detail="This job is no longer active or has been closed.")
 
     return job
+
+# =====================================================================
+# EMPLOYER: UPDATE JOB POST
+# =====================================================================
+@router.put("/update_job/{job_id}")
+async def update_job_post(
+    job_id: str,
+    job_update_data: JobUpdateRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Updates an existing job post. 
+    Only the employer who created the job is authorized to edit it.
+    """
+    # 1. Fetch the job from the database
+    job = await Job.get(job_id)
+    
+    # 2. Check if the job exists
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Job post not found."
+        )
+        
+    # 3. Security Check: Ensure the logged-in employer actually owns this job post
+    # (Assuming your Job model has an 'employer_id' field)
+    if str(job.employer_id) != str(current_employer.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="You are not authorized to edit this job post."
+        )
+        
+    # 4. Extract only the fields the frontend actually sent
+    update_dict = job_update_data.model_dump(exclude_unset=True)
+    
+    if not update_dict:
+        return {"message": "No changes provided.", "job_id": job_id}
+        
+    # 5. Dynamically apply the updates to the Job document
+    for field, value in update_dict.items():
+        setattr(job, field, value)
+        
+    # 6. Save the updated document back to MongoDB
+    await job.save()
+    
+    return {
+        "message": "Job post updated successfully",
+        "job_id": str(job.id),
+        "updated_fields": list(update_dict.keys())
+    }
 
 # =====================================================================
 # EMPLOYER DASHBOARD: JOBS WITH MATCHMAKING & APPLICANTS

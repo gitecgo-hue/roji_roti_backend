@@ -178,3 +178,22 @@ class SkillInput(BaseModel):
     name: str
     level: Optional[str] = Field(None, description="beginner, intermediate, expert")
     years: Optional[float] = None
+
+# --- Employee Applied Job Response Schema ---
+class AppliedJobResponse(BaseModel):
+    """Schema for returning a job the employee has applied to"""
+    application_id: str
+    job_id: str
+    job_title: Optional[str] = None
+    company_name: Optional[str] = None
+    status: str  # e.g., "pending", "shortlisted", "rejected"
+    applied_at: datetime
+
+# --- Employee Saved Job Response Schema ---
+class SavedJobResponse(BaseModel):
+    """Schema for returning a saved job to the employee"""
+    job_id: str
+    job_title: Optional[str] = None
+    company_name: Optional[str] = None
+    location: Optional[str] = None
+    expected_salary: Optional[float] = None 

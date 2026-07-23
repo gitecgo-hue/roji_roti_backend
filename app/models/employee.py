@@ -99,6 +99,9 @@ class Employee(Document):
     
     # --- Location Data ---
     location: Optional[GeoLocation] = None
+
+    # --- Saved Jobs & Applications ---
+    saved_job_ids: List[str] = Field(default_factory=list)
     
     # --- Professional Details ---
     skills: Optional[List[Skill]] = []

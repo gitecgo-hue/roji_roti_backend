@@ -7,6 +7,10 @@ from datetime import datetime
 from app.models.rating import Rating
 from app.models.employee import Employee
 from app.models.employer import Employer
+from app.models.rating import PlatformRating
+
+# --- Import Schemas ---
+from app.schemas.rating import PlatformRatingCreate
 
 # --- Import Dependencies ---
 from app.api.dependencies import get_current_employer
@@ -79,3 +83,37 @@ async def submit_worker_rating(
         "new_average": worker.rating,
         "rating_id": str(new_rating.id)
     }
+
+# --- Platform Rating Endpoint ---
+@router.post("/platform_rating")
+async def submit_platform_rating(
+    rating_data: PlatformRatingCreate,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Allows a logged-in employer to rate the Roji Roti platform.
+    """
+    # Optional: Check if they have already rated the platform recently to prevent spam
+    existing_rating = await PlatformRating.find_one(
+        {"user_id": str(current_employer.id), "user_type": "employer"}
+    )
+    
+    if existing_rating:
+        # If they already rated, we can choose to update their existing rating
+        existing_rating.rating = rating_data.rating
+        existing_rating.feedback = rating_data.feedback
+        existing_rating.created_at = datetime.now(timezone.utc) # Update the timestamp
+        await existing_rating.save()
+        return {"message": "Thank you! Your previous rating has been updated."}
+
+    # Otherwise, create a brand new rating document
+    new_rating = PlatformRating(
+        user_id=str(current_employer.id),
+        user_type="employer",
+        rating=rating_data.rating,
+        feedback=rating_data.feedback
+    )
+    
+    await new_rating.insert()
+    
+    return {"message": "Thank you for your feedback!"}

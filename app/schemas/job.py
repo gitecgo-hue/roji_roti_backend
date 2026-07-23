@@ -51,3 +51,15 @@ class JobDashboardResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class JobUpdateRequest(BaseModel):
+    """Schema for updating an existing job post"""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    experience_required: Optional[float] = None
+    skills_required: Optional[List[str]] = None
+    job_type: Optional[str] = None # e.g., "Full-time", "Part-time"
+    is_active: Optional[bool] = None # Allows the employer to pause/close the job
