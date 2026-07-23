@@ -7,15 +7,15 @@ logger = logging.getLogger(__name__)
 
 class RecommendationService:
     @staticmethod
-    async def get_best_jobs_for_worker(worker: Employee, max_distance_km: int = 15, limit: int = 20) -> List[dict]:
+    async def get_best_jobs_for_employee(employee: Employee, max_distance_km: int = 15, limit: int = 20) -> List[dict]:
         """
-        Uses a MongoDB Aggregation Pipeline to score and rank jobs for a specific worker.
+        Uses a MongoDB Aggregation Pipeline to score and rank jobs for a specific employee.
         """
-        # 1. Safely extract worker data
-        worker_lat = worker.current_location.coordinates[1]
-        worker_lon = worker.current_location.coordinates[0]
-        worker_category = getattr(worker, "category", "").lower()
-        worker_exp = getattr(worker, "experience", 0)
+        # 1. Safely extract employee data
+        employee_lat = employee.current_location.coordinates[1]
+        employee_lon = employee.current_location.coordinates[0]
+        employee_category = getattr(employee, "category", "").lower()
+        employee_exp = getattr(employee, "experience", 0)
 
         # 2. Build the Aggregation Pipeline
         pipeline = [
@@ -25,7 +25,7 @@ class RecommendationService:
                 "$geoNear": {
                     "near": {
                         "type": "Point",
-                        "coordinates": [worker_lon, worker_lat]
+                        "coordinates": [employee_lon, employee_lat]
                     },
                     "distanceField": "distance_in_meters",
                     "maxDistance": max_distance_km * 1000,
@@ -50,7 +50,7 @@ class RecommendationService:
                         "$add": [
                             # A. CATEGORY SCORE (40 Points max)
                             {
-                                "$cond": [{"$eq": ["$job_cat_lower", worker_category]}, 40, 0]
+                                "$cond": [{"$eq": ["$job_cat_lower", employee_category]}, 40, 0]
                             },
                             
                             # B. DISTANCE SCORE (40 Points max)
@@ -67,10 +67,10 @@ class RecommendationService:
                             },
                             
                             # C. EXPERIENCE SCORE (20 Points max)
-                            # If job requires less or equal exp than worker has = 20 pts
+                            # If job requires less or equal exp than employee has = 20 pts
                             {
                                 "$cond": [
-                                    {"$lte": [{"$ifNull": ["$experience_required", 0]}, worker_exp]}, 
+                                    {"$lte": [{"$ifNull": ["$experience_required", 0]}, employee_exp]}, 
                                     20, 
                                     0
                                 ]

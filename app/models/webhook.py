@@ -9,7 +9,7 @@ class WebhookSubscription(Document):
     """
     partner_name: str
     target_url: str # The URL where the POST request is sent [cite: 361-362]
-    # Events like: worker_registered, job_posted, worker_hired [cite: 355-360]
+    # Events like: employee_registered, job_posted, employee_hired [cite: 355-360]
     events: List[str] 
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)

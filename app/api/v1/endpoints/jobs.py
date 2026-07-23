@@ -101,18 +101,18 @@ async def create_job(
     return response_dict
     
 # =====================================================================
-# WORKER: JOB DISCOVERY & SEARCH
+# EMPLOYEE: JOB DISCOVERY & SEARCH
 # =====================================================================
 
 @router.get("/feed", response_model=dict)
-async def get_worker_home_feed(
+async def get_employee_home_feed(
     lat: Optional[float] = None, 
     lon: Optional[float] = None, 
     radius_km: int = 25, 
-    current_worker: Employee = Depends(get_current_employee)
+    current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Dynamically loads jobs for the worker based on their trade category and GPS location.
+    Dynamically loads jobs for the employee based on their trade category and GPS location.
     """
     feed_items = {}
     
@@ -120,12 +120,12 @@ async def get_worker_home_feed(
     feed_items["national_jobs"] = await Job.find(
         Job.is_pan_india == True, 
         Job.is_active == True,
-        Job.category == current_worker.category 
+        Job.category == current_employee.category 
     ).limit(10).to_list()
 
-    # 2. If coordinates aren't provided, try to geocode the worker's home location_name
+    # 2. If coordinates aren't provided, try to geocode the employee's home location_name
     if not lat or not lon:
-        coords = await get_coordinates_from_name(current_worker.location_name)
+        coords = await get_coordinates_from_name(current_employee.location_name)
         if coords:
             lon, lat = coords
 
@@ -145,14 +145,14 @@ async def get_worker_home_feed(
     else:
         # Fallback to string matching if geocoding fails
         feed_items["local_jobs"] = await Job.find(
-            Job.location_name == current_worker.location_name,
+            Job.location_name == current_employee.location_name,
             Job.is_active == True
         ).limit(20).to_list()
 
     return feed_items
 
 # =====================================================================
-# WORKER: JOB SEARCH (Advanced)
+# EMPLOYEE: JOB SEARCH (Advanced)
 # =====================================================================
 
 @router.post("/search", response_model=List[JobResponse])

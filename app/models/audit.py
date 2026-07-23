@@ -6,7 +6,7 @@ from pydantic import Field
 class AuditLog(Document):
     admin_id: PydanticObjectId
     admin_name: str
-    action: str  # e.g., "VERIFY_GST", "SUSPEND_USER", "APPROVE_WORKER"
+    action: str  # e.g., "VERIFY_GST", "SUSPEND_USER", "APPROVE_EMPLOYER", etc.
     target_type: str  # "employer" or "employee"
     target_id: PydanticObjectId
     details: Optional[str] = None

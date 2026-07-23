@@ -56,7 +56,7 @@ async def dispatch_expiry_reminders():
         if employer and employer.phone:
             message = (
                 f"Dear {employer.company_name or 'Employer'}, your Roji Roti {sub.plan_type.upper()} "
-                "plan expires in 3 days. Renew now to avoid losing access to worker resumes!"
+                "plan expires in 3 days. Renew now to avoid losing access to employee resumes!"
             )
             # await SmsService.send_generic_message(employer.phone, message)
             logger.info(f"Dispatched 3-day expiry reminder to {employer.phone}")

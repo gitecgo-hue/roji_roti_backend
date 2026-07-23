@@ -9,7 +9,7 @@ class NotificationService:
     @staticmethod
     async def broadcast_new_job(job_id: str):
         """
-        Finds nearby, active, and matching workers and sends them an SMS.
+        Finds nearby, active, and matching employees and sends them an SMS.
         """
         # Fetch the freshly inserted job
         job = await Job.get(job_id)
@@ -42,19 +42,19 @@ class NotificationService:
             # Fallback to text-based location match
             query["preferred_locations"] = {"$in": job.locations}
 
-        # 3. Fetch matched workers (Limit to 50 to control SMS costs)
-        matched_workers = await Employee.find(query).limit(50).to_list()
+        # 3. Fetch matched employees (Limit to 50 to control SMS costs)
+        matched_employees = await Employee.find(query).limit(50).to_list()
         
-        if not matched_workers:
-            logger.info(f"No available workers found for job {job_id}")
+        if not matched_employees:
+            logger.info(f"No available employees found for job {job_id}")
             return
 
         location_name = job.locations[0] if job.locations else "your area"
 
         # 4. Dispatch SMS
-        for worker in matched_workers:
+        for employee in matched_employees:
             await SmsService.send_job_alert(
-                phone_number=worker.phone,
+                phone_number=employee.phone,
                 category=job.category,
                 location=location_name,
                 salary=job.salary

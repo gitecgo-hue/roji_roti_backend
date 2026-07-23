@@ -106,7 +106,7 @@ async def create_new_admin(
 async def get_system_stats(admin: Admin = Depends(get_current_admin)):
     """ Aggregates high-level platform data and real revenue. """
     employer_count = await Employer.count()
-    worker_count = await Employee.count()
+    employee_count = await Employee.count()
     active_jobs = await Job.find(Job.is_active == True).count()
     
     all_payments = await Payment.find(Payment.status == "captured").to_list()
@@ -119,7 +119,7 @@ async def get_system_stats(admin: Admin = Depends(get_current_admin)):
 
     return AdminDashboardStats(
         total_employers=employer_count,
-        total_workers=worker_count,
+        total_employees=employee_count,
         active_jobs=active_jobs,
         pending_verifications=pending_v,
         revenue_stats={
@@ -133,13 +133,13 @@ async def get_system_stats(admin: Admin = Depends(get_current_admin)):
 async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
     """ Generates granular growth and referral metrics. """
     daily_stats, referral_stats, sub_stats = await asyncio.gather(
-        ReportService.get_daily_worker_stats(),
+        ReportService.get_daily_employee_stats(),
         ReportService.get_referral_stats(),
         ReportService.get_subscription_stats()
     )
     
     return ComprehensiveReport(
-        daily_workers=daily_stats,
+        daily_employees=daily_stats,
         referrals=referral_stats,
         subscriptions=sub_stats
     )
@@ -152,87 +152,87 @@ async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
 @router.get("/kyc/pending")
 async def get_pending_kyc_queue(current_admin: Admin = Depends(get_current_admin)):
     """
-    Retrieves all worker profiles currently waiting for manual KYC review.
+    Retrieves all employee profiles currently waiting for manual KYC review.
     """
-    pending_workers = await Employee.find({"kyc_status": "PENDING_REVIEW"}).sort("updated_at").to_list()
+    pending_employees = await Employee.find({"kyc_status": "PENDING_REVIEW"}).sort("updated_at").to_list()
     
     return [{
-        "worker_id": str(worker.id),
-        "name": worker.name,
-        "phone": worker.phone,
-        "category": worker.category,
-        "kyc_document_url": worker.kyc_document_url, # The blurry image URL
-        "failed_attempts": worker.kyc_attempts
-    } for worker in pending_workers]
+        "employee_id": str(employee.id),
+        "name": employee.name,
+        "phone": employee.phone,
+        "category": employee.category,
+        "kyc_document_url": employee.kyc_document_url, # The blurry image URL
+        "failed_attempts": employee.kyc_attempts
+    } for employee in pending_employees]
 
 
-@router.patch("/kyc/{worker_id}/approve")
+@router.patch("/kyc/{employee_id}/approve")
 async def manual_kyc_approve(
-    worker_id: str,
+    employee_id: str,
     id_type: str = Body(..., description="Must be 'AADHAAR' or 'PAN'"),
     extracted_number: str = Body(..., description="The ID number the admin manually read from the image"),
     current_admin: Admin = Depends(get_current_admin)
 ):
     """
-    Admin manually overrides a failed OCR attempt, inputs the correct ID number, and approves the worker.
+    Admin manually overrides a failed OCR attempt, inputs the correct ID number, and approves the employee.
     """
-    worker = await Employee.get(ObjectId(worker_id))
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found.")
+    employee = await Employee.get(ObjectId(employee_id))
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
 
-    if worker.kyc_status == "VERIFIED":
-        raise HTTPException(status_code=400, detail="Worker is already verified.")
+    if employee.kyc_status == "VERIFIED":
+        raise HTTPException(status_code=400, detail="Employee is already verified.")
 
     # 1. Save the manually extracted data
     if id_type == "AADHAAR":
-        worker.adhar_card_number = extracted_number
+        employee.adhar_card_number = extracted_number
     else:
-        worker.pan_card = extracted_number
+        employee.pan_card = extracted_number
 
     # 2. Update their status
-    worker.kyc_status = "VERIFIED"
-    worker.is_approved = True
-    
+    employee.kyc_status = "VERIFIED"
+    employee.is_approved = True
+
     # Optional: Clear the document URL if you don't want to store PII long-term
-    # worker.kyc_document_url = None 
+    # employee.kyc_document_url = None
 
-    await worker.save()
+    await employee.save()
 
-    # 3. Notify the worker
-    # await SmsService.send_sms(worker.phone, "Great news! Your Roji Roti account has been manually verified and is now active. You can now apply for jobs!")
+    # 3. Notify the employee
+    # await SmsService.send_sms(employee.phone, "Great news! Your Roji Roti account has been manually verified and is now active. You can now apply for jobs!")
 
-    return {"status": "success", "message": f"Worker {worker.name} has been successfully verified."}
+    return {"status": "success", "message": f"Employee {employee.name} has been successfully verified."}
 
 
-@router.patch("/kyc/{worker_id}/reject")
+@router.patch("/kyc/{employee_id}/reject")
 async def manual_kyc_reject(
-    worker_id: str,
-    reason: str = Body(..., description="Reason for rejection to send to the worker"),
+    employee_id: str,
+    reason: str = Body(..., description="Reason for rejection to send to the employee"),
     current_admin: Admin = Depends(get_current_admin)
 ):
     """
     Admin rejects the document because it is completely unreadable or fraudulent.
-    Resets the worker's attempt counter so they can try uploading again.
+    Resets the employee's attempt counter so they can try uploading again.
     """
-    worker = await Employee.get(ObjectId(worker_id))
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found.")
+    employee = await Employee.get(ObjectId(employee_id))
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found.")
 
     # 1. Reset their KYC state
-    worker.kyc_status = "UNVERIFIED"
-    worker.kyc_attempts = 0 # Give them 3 fresh attempts!
+    employee.kyc_status = "UNVERIFIED"
+    employee.kyc_attempts = 0 # Give them 3 fresh attempts!
     
     # 2. Delete the bad image to save cloud storage space
-    # await StorageService.delete_kyc_doc(worker.kyc_document_url)
-    worker.kyc_document_url = None
+    # await StorageService.delete_kyc_doc(employee.kyc_document_url)
+    employee.kyc_document_url = None
 
-    await worker.save()
+    await employee.save()
 
-    # 3. Notify the worker
+    # 3. Notify the employee
     notification_msg = f"Your recent ID upload was rejected: {reason}. Please log back into the app and take a clear, well-lit photo of your ID."
-    # await SmsService.send_sms(worker.phone, notification_msg)
+    # await SmsService.send_sms(employee.phone, notification_msg)
 
-    return {"status": "success", "message": f"Worker {worker.name}'s document rejected. They have been notified to try again."}
+    return {"status": "success", "message": f"Employee {employee.name}'s document rejected. They have been notified to try again."}
 
 
 # =====================================================================
@@ -263,25 +263,25 @@ async def verify_employer_gst(employer_id: str, admin: Admin = Depends(get_curre
     
     return {"message": f"Employer {employer.company_name} verified successfully."}
 
-@router.put("/approve-worker/{worker_id}")
-async def approve_worker_profile(worker_id: str, admin: Admin = Depends(get_current_admin)):
-    """ Approves a worker, making them visible in searches. """
-    worker = await Employee.get(ObjectId(worker_id))
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found")
+@router.put("/approve-employee/{employee_id}")
+async def approve_employee_profile(employee_id: str, admin: Admin = Depends(get_current_admin)):
+    """ Approves an employee, making them visible in searches. """
+    employee = await Employee.get(ObjectId(employee_id))
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
 
-    worker.is_approved = True
-    await worker.save()
+    employee.is_approved = True
+    await employee.save()
     
     await AuditService.log_action(
         admin=admin,
-        action="APPROVE_WORKER",
-        target_id=worker_id,
+        action="APPROVE_EMPLOYEE",
+        target_id=employee_id,
         target_type="employee",
-        details=f"Approved worker profile for {worker.name}"
+        details=f"Approved employee profile for {employee.name}"
     )
     
-    return {"message": f"Worker {worker.name} approved."}
+    return {"message": f"Employee {employee.name} approved."}
 
 
 # =====================================================================

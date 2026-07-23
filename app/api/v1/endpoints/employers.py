@@ -1,19 +1,22 @@
 # --- IMPORTS ---
-from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
+from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 from bson import ObjectId
 from datetime import datetime, timedelta
 from typing import List, Optional
 from beanie import PydanticObjectId
+import uuid
 import re
 
-# --- Core & Settings ---
+# --- Core Imports ---
 from app.core.config import settings
 from app.core.security import verify_password, get_password_hash
+
+# --- Dependencies Imports ---
 from app.api.dependencies import get_current_employer
 
-# --- Model & Service Imports ---
+# --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier 
 from app.models.employee import Employee
 from app.models.subscriptions import Subscription
@@ -36,12 +39,16 @@ from app.services.email import EmailService
 from app.utils.referral import generate_referral_code
 from app.utils.maps import MapService
 
-# --- SCHEMA IMPORTS ---
-from app.schemas.employer import EmployerCompanyProfileResponse, EmployerDashboardResponse, EmployerPersonalProfileResponse
+# --- Schema Imports ---
 from app.schemas.search import CandidateSearchRequest
 from app.schemas.search import SavedSearchCreate, SavedSearchResponse
-from app.schemas.billing import TransactionResponse, PaymentResponse, BillingProfileUpdateRequest
+from app.schemas.billing import (
+    TransactionResponse,
+    PaymentResponse,
+    BillingProfileUpdateRequest
+)
 from app.schemas.employer import (
+    EmployerDashboardResponse,
     EmployerCompleteProfileRequest,
     EmployerPersonalProfileResponse,
     EmployerCompanyProfileResponse,
@@ -51,10 +58,7 @@ from app.schemas.employer import (
 
 router = APIRouter()
 
-# =====================================================================
-# PYDANTIC SCHEMAS
-# =====================================================================
-
+# --- PYDANTIC SCHEMAS ---
 class CompleteEmployerProfileRequest(BaseModel):
     company_name: str = Field(..., description="The name of the business")
     email: EmailStr
@@ -72,7 +76,7 @@ class EmployerResponse(BaseModel):
     phone: str
     is_verified: bool
 
-class RateWorkerRequest(BaseModel):
+class RateEmployeeRequest(BaseModel):
     rating: float = Field(..., ge=1.0, le=5.0, description="Rating between 1 and 5")
     comment: str
 
@@ -83,10 +87,7 @@ class UpdatePhoneRequest(BaseModel):
     new_phone: str = Field(..., description="The new 10-digit mobile number")
     otp_code: str = Field(..., description="The 6-digit OTP sent to the NEW number")
 
-
-# =====================================================================
-# PROFILE COMPLETION & DASHBOARD 
-# =====================================================================
+# --- PROFILE COMPLETION & DASHBOARD ---
 @router.patch("/profile/complete", response_model=dict, status_code=status.HTTP_200_OK)
 async def complete_employer_profile(
     data: CompleteEmployerProfileRequest, 
@@ -100,7 +101,7 @@ async def complete_employer_profile(
     # Convert the incoming data into a dictionary, ignoring any fields the frontend didn't send
     update_dict = data.model_dump(exclude_unset=True)
 
-    # 1. Check for email duplication (excluding current user) & Handle Verification
+    # Check for email duplication (excluding current user) & Handle Verification
     if "email" in update_dict and update_dict["email"]:
         existing_employer = await Employer.find_one({"email": update_dict["email"], "_id": {"$ne": current_employer.id}})
         if existing_employer:
@@ -113,7 +114,7 @@ async def complete_employer_profile(
         if update_dict["email"] != getattr(current_employer, "email", None):
             current_employer.email_verified = False
 
-    # 2. Geocode Address via Ola Maps
+    # Geocode Address via Ola Maps
     # Check for either 'company_address' or 'address' depending on how your schema is defined
     address_field = update_dict.get("company_address") or update_dict.get("address")
     if address_field:
@@ -129,18 +130,18 @@ async def complete_employer_profile(
             if "company_address" in update_dict:
                 del update_dict["company_address"]
 
-    # 3. Hash Password (if provided in the payload)
+    # Hash Password (if provided in the payload)
     if "password" in update_dict:
         # Remove the raw password from the dictionary and replace it with the hashed version
         update_dict["hashed_password"] = get_password_hash(update_dict.pop("password"))
 
-    # 4. Dynamically apply all finalized fields to the database model
+    # Dynamically apply all finalized fields to the database model
     for field, value in update_dict.items():
         setattr(current_employer, field, value)
         
     await current_employer.save()
 
-    # 5. Initialize Free Tier Subscription & Welcome Email (Background Task)
+    # Initialize Free Tier Subscription & Welcome Email (Background Task)
     async def setup_new_employer(emp_id: str, email: str, name: str):
         # NOTE: You may want to add a check here to ensure a subscription doesn't already exist
         base_sub = Subscription(
@@ -160,7 +161,7 @@ async def complete_employer_profile(
 
     background_tasks.add_task(setup_new_employer, str(current_employer.id), current_employer.email, current_employer.name)
 
-    # 6. Determine if the profile has enough data to be considered "complete"
+    # Determine if the profile has enough data to be considered "complete"
     is_profile_complete = bool(
         getattr(current_employer, "name", None) and 
         getattr(current_employer, "company_name", None) and 
@@ -182,9 +183,7 @@ async def complete_employer_profile(
             is_verified=current_employer.is_verified
         )
     }
-# =========================================
-# EMPLOYER DASHBOARD
-# =========================================
+# --- EMPLOYER DASHBOARD ---
 @router.get("/dashboard", response_model=EmployerDashboardResponse)
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
@@ -221,9 +220,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
         contacts_viewed=sub.contacts_checked
     )
 
-# ==========================================
-# GET PERSONAL PROFILE
-# ==========================================
+# --- GET PERSONAL PROFILE ---
 @router.get("/profile/personal", response_model=EmployerPersonalProfileResponse)
 async def get_personal_profile(
     current_employer: Employer = Depends(get_current_employer)
@@ -233,9 +230,7 @@ async def get_personal_profile(
     """
     return current_employer
 
-# ==========================================
-# GET COMPANY PROFILE
-# ==========================================
+# --- GET COMPANY PROFILE ---
 @router.get("/profile/company", response_model=EmployerCompanyProfileResponse)
 async def get_company_profile(
     current_employer: Employer = Depends(get_current_employer)
@@ -245,10 +240,59 @@ async def get_company_profile(
     """
     return current_employer
 
-# ==========================================
-# UPDATE PERSONAL & COMPANY PROFILE
-# ==========================================
+# --- UPLOAD PROFILE PICTURE / LOGO ---
+@router.post("/profile/upload_logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Uploads a company logo or profile picture for the employer.
+    Accepts image files (JPEG, PNG).
+    """
+    # Validate the file type
+    allowed_content_types = ["image/jpeg", "image/png", "image/webp"]
+    if file.content_type not in allowed_content_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Please upload a JPEG, PNG, or WEBP image."
+        )
+        
+    # Validate file size - e.g., max 5MB
+    # Note: FastAPI loads large files to disk automatically, but checking size is good practice
+    file.file.seek(0, 2) # Go to the end of the file
+    file_size = file.file.tell() # Get the size
+    file.file.seek(0) # Reset the cursor back to the beginning for reading
+    
+    if file_size > 5 * 1024 * 1024: # 5 Megabytes
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File size too large. Maximum size is 5MB."
+        )
 
+    # Generate a unique filename to prevent overwrites
+    file_extension = file.filename.split(".")[-1]
+    unique_filename = f"employer_{current_employer.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+    
+    # UPLOAD TO CLOUD STORAGE (AWS S3, Cloudinary, etc.)
+    # Replace this block with your actual cloud upload logic.
+    # Example:
+    # uploaded_url = await s3_client.upload(file.file, unique_filename)
+    
+    # --- MOCK UPLOAD (For demonstration purposes) ---
+    uploaded_url = f"https://your-cloud-storage.com/uploads/logos/{unique_filename}"
+    # ---------------------------------------------------------
+
+    # Update the employer's profile in the database
+    current_employer.logo_url = uploaded_url
+    await current_employer.save()
+    
+    return {
+        "message": "Logo uploaded successfully",
+        "logo_url": current_employer.logo_url
+    }
+
+# --- UPDATE PERSONAL & COMPANY PROFILE ---
 @router.put("/profile_update")
 async def update_employer_profile(
     profile_data: EmployerProfileUpdateRequest,
@@ -260,7 +304,7 @@ async def update_employer_profile(
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # 1. Check for email duplication (excluding current user)
+    # Check for email duplication (excluding current user)
     if "email" in update_dict and update_dict["email"]:
         existing_employer = await Employer.find_one({"email": update_dict["email"], "_id": {"$ne": current_employer.id}})
         if existing_employer:
@@ -269,11 +313,11 @@ async def update_employer_profile(
                 detail="An account with this email already exists."
             )
             
-        # 2. If they change their email, we must mark it as unverified again
+        # If they change their email, we must mark it as unverified again
         if update_dict["email"] != current_employer.email:
             current_employer.email_verified = False
         
-    # 3. Apply changes dynamically (handles both personal and company fields seamlessly)
+    # Apply changes dynamically (handles both personal and company fields seamlessly)
     for field, value in update_dict.items():
         setattr(current_employer, field, value)
         
@@ -288,16 +332,60 @@ async def update_employer_profile(
         "gstin": getattr(current_employer, "gstin", None)
     }
 
-# =====================================================================
-# CORE RECRUITMENT FLOW (ATS)
-# =====================================================================
+# --- PROFILE & ACCOUNT MANAGEMENT (SECURE) ---
+@router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
+async def update_employer_phone(
+    data: UpdatePhoneRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    clean_new_phone = data.new_phone[-10:]
 
+    if current_employer.phone == clean_new_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="This is already your current phone number."
+        )
+
+    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
+                  await Employee.find_one({"phone": clean_new_phone})
+    
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number is already registered to another account."
+        )
+
+    otp_record = await OTP.find_one({"phone": clean_new_phone})
+    
+    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired OTP for the new phone number."
+        )
+
+    otp_record.hashed_code = None
+    await otp_record.save()
+
+    current_employer.phone = clean_new_phone
+    if hasattr(current_employer, "updated_at"):
+        current_employer.updated_at = datetime.utcnow()
+        
+    await current_employer.save()
+
+    return {
+        "status": "success", 
+        "message": "Phone number successfully updated.", 
+        "new_phone": current_employer.phone
+    }
+
+# --- CORE RECRUITMENT FLOW (ATS) ---
 @router.get("/my-jobs", response_model=List[Job]) 
 async def list_employer_jobs(current_employer: Employer = Depends(get_current_employer)):
     """Sees every job the employer has ever posted."""
     jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     return jobs
 
+# --- JOB APPLICANTS & APPLICATION MANAGEMENT ---
 @router.get("/jobs/{job_id}/applicants", response_model=List[dict])
 async def list_job_applicants(
     job_id: str, 
@@ -320,14 +408,14 @@ async def list_job_applicants(
 
     results = []
     for app in applications:
-        worker = await Employee.get(PydanticObjectId(app.employee_id))
+        employee = await Employee.get(PydanticObjectId(app.employee_id))
         
         results.append({
             "application_id": str(app.id),
-            "worker_id": str(app.employee_id),
-            "worker_name": worker.name if worker else "Deleted Worker",
-            "worker_category": worker.category if worker else "N/A",
-            "worker_phone": worker.phone if worker else "N/A", 
+            "employee_id": str(app.employee_id),
+            "employee_name": employee.name if employee else "Deleted Employee",
+            "employee_category": employee.category if employee else "N/A",
+            "employee_phone": employee.phone if employee else "N/A", 
             "status": getattr(app, "status", "applied"),
             "applied_at": getattr(app, "applied_at", datetime.utcnow())
         })
@@ -383,13 +471,46 @@ async def update_application_status(
         "job_closed": job_closed
     }
 
+# --- DOWNLOAD RESUME ---
+@router.get("/download-resume/{employee_id}")
+async def download_employee_resume(
+    employee_id: str, 
+    current_employer: Employer = Depends(get_current_employer)
+):
+    await SubscriptionService.check_quota(str(current_employer.id), action_type="download_resume")
+    
+    employee = await Employee.get(PydanticObjectId(employee_id))
+    if not employee: 
+        raise HTTPException(status_code=404, detail="Employee not found")
 
-# =====================================================================
-# DISCOVERY, SEARCH & ACTIONS
-# =====================================================================
+    pdf_buffer = ResumeService.generate_pdf(employee)
+    
+    await SubscriptionService.increment_usage(str(current_employer.id), action_type="download_resume")
+    
+    safe_name = getattr(employee, 'name', 'Employee').replace(" ", "_")
+    
+    return StreamingResponse(
+        pdf_buffer, 
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=Resume_{safe_name}.pdf"}
+    )
 
+# --- CONTACT UNLOCKS ---
+@router.post("/unlock-employee/{employee_id}")
+async def unlock_employee_contact(employee_id: str, current_employer: Employer = Depends(get_current_employer)):
+    await SubscriptionService.check_quota(str(current_employer.id), action_type="contact_view")
+    employee = await Employee.get(PydanticObjectId(employee_id))
+    if not employee: raise HTTPException(status_code=404, detail="Employee not found")
+
+    await SubscriptionService.increment_usage(str(current_employer.id), action_type="contact_view")
+    unlock_record = ContactUnlock(employer_id=current_employer.id, employee_id=ObjectId(employee_id))
+    await unlock_record.insert()
+
+    return {"name": employee.name, "phone": employee.phone, "message": "Contact unlocked!"}
+
+# --- DISCOVERY, SEARCH & ACTIONS ---
 @router.post("/employee-search", response_model=List[dict])
-async def search_candidates(
+async def search_employees(
     search_data: CandidateSearchRequest,
     current_employer: Employer = Depends(get_current_employer)
 ):
@@ -398,7 +519,7 @@ async def search_candidates(
     """
     query = {}
     
-    # 1. Keyword Search (Matches against skills or job title)
+    # Keyword Search (Matches against skills or job title)
     if search_data.keywords:
         # Using regex to make it case-insensitive
         regex_pattern = re.compile(search_data.keywords, re.IGNORECASE)
@@ -407,11 +528,11 @@ async def search_candidates(
             {"title": {"$regex": regex_pattern}}
         ]
         
-    # 2. City / Region Search
+    # City / Region Search
     if search_data.city:
         query["location_name"] = {"$regex": re.compile(search_data.city, re.IGNORECASE)}
         
-    # 3. Experience Range
+    # Experience Range
     if search_data.min_experience is not None or search_data.max_experience is not None:
         query["total_experience"] = {}
         if search_data.min_experience is not None:
@@ -419,7 +540,7 @@ async def search_candidates(
         if search_data.max_experience is not None:
             query["total_experience"]["$lte"] = search_data.max_experience
             
-    # 4. Salary Range (Assuming your Employee model tracks expected salary)
+    # Salary Range (Assuming your Employee model tracks expected salary)
     if search_data.min_salary is not None or search_data.max_salary is not None:
         query["expected_salary"] = {}
         if search_data.min_salary is not None:
@@ -427,7 +548,7 @@ async def search_candidates(
         if search_data.max_salary is not None:
             query["expected_salary"]["$lte"] = search_data.max_salary
             
-    # 5. Education Levels
+    # Education Levels
     if search_data.education_levels and len(search_data.education_levels) > 0:
         query["education"] = {"$in": search_data.education_levels}
         
@@ -436,10 +557,7 @@ async def search_candidates(
     
     return results
 
-# =====================================================================
-# EMPLOYER-ONLY WORKER DISCOVERY
-# =====================================================================
-
+# --- EMPLOYER-ONLY DISCOVERY ---
 @router.get("/employee-search", response_model=List[dict])
 async def search_employees(
     category: Optional[str] = None,
@@ -452,33 +570,30 @@ async def search_employees(
     if location: query["location"] = {"$regex": location, "$options": "i"}
     if min_experience > 0: query["experience_years"] = {"$gte": min_experience}
 
-    workers = await Employee.find(query).to_list()
+    employees = await Employee.find(query).to_list()
     return [{
-        "id": str(w.id), "name": w.name, "category": w.category, 
-        "location": w.location, "experience": getattr(w, "experience_years", 0),
-        "rate": getattr(w, "daily_rate", None), "rating": getattr(w, "rating", 0.0) 
-    } for w in workers]
+        "id": str(e.id), "name": e.name, "category": e.category, 
+        "location": e.location, "experience": getattr(e, "experience_years", 0),
+        "rate": getattr(e, "daily_rate", None), "rating": getattr(e, "rating", 0.0) 
+    } for e in employees]
 
-#=====================================================================
-# CONTACT UNLOCKS
-#====================================================================
+# --- Get Saved Searches ---
+@router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
+async def get_saved_searches(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """Retrieves all saved searches for the current employer."""
+    searches = await SavedSearch.find({"employer_id": str(current_employer.id)}).sort("-created_at").to_list()
+    
+    response = []
+    for search in searches:
+        search_dict = search.model_dump()
+        search_dict["id"] = str(search.id)
+        response.append(search_dict)
+        
+    return response
 
-@router.post("/unlock-employee/{worker_id}")
-async def unlock_worker_contact(worker_id: str, current_employer: Employer = Depends(get_current_employer)):
-    await SubscriptionService.check_quota(str(current_employer.id), action_type="contact_view")
-    worker = await Employee.get(PydanticObjectId(worker_id))
-    if not worker: raise HTTPException(status_code=404, detail="Worker not found")
-
-    await SubscriptionService.increment_usage(str(current_employer.id), action_type="contact_view")
-    unlock_record = ContactUnlock(employer_id=current_employer.id, worker_id=ObjectId(worker_id))
-    await unlock_record.insert()
-
-    return {"name": worker.name, "phone": worker.phone, "message": "Contact unlocked!"}
-
-#=====================================================================
-# SAVED SEARCHES
-#====================================================================
-
+# --- SAVED SEARCHES ---
 @router.post("/database/saved-searches", response_model=SavedSearchResponse)
 async def save_candidate_search(
     save_data: SavedSearchCreate,
@@ -497,27 +612,52 @@ async def save_candidate_search(
     response_data["id"] = str(new_saved_search.id)
     return response_data
 
-# --- Get Saved Searches ---
-@router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
-async def get_saved_searches(
+# --- RATINGS & REVIEWS ---
+@router.post("/rate-employee/{employee_id}")
+async def rate_employee(
+    employee_id: str, 
+    request: RateEmployeeRequest, 
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Retrieves all saved searches for the current employer."""
-    searches = await SavedSearch.find({"employer_id": str(current_employer.id)}).sort("-created_at").to_list()
+    has_unlocked = await ContactUnlock.find_one({
+        "employer_id": current_employer.id,
+        "employee_id": ObjectId(employee_id)
+    })
     
-    response = []
-    for search in searches:
-        search_dict = search.model_dump()
-        search_dict["id"] = str(search.id)
-        response.append(search_dict)
+    if not has_unlocked:
+        raise HTTPException(
+            status_code=403, 
+            detail="You can only leave a review for employees whose contact you have unlocked."
+        )
+
+    employee = await Employee.get(ObjectId(employee_id))
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    current_rating = getattr(employee, 'rating', 0.0)
+    
+    if current_rating == 0.0:
+        employee.rating = request.rating
+    else:
+        employee.rating = round((current_rating + request.rating) / 2, 1) 
         
-    return response
+    await employee.save()
+    
+    new_alert = Notification(
+        user_id=current_employer.id,
+        title="Review Submitted",
+        message=f"You successfully gave {employee.name} a {request.rating}-star review.",
+        is_read=False
+    )
+    await new_alert.save()
 
+    return {
+        "message": "Review submitted successfully!",
+        "employee": employee.name,
+        "new_rating": employee.rating
+    }
 
-# =====================================================================
-# NOTIFICATIONS & RESUMES
-# =====================================================================
-
+# --- NOTIFICATIONS & RESUMES ---
 @router.get("/notifications")
 async def get_employer_notifications(current_employer: Employer = Depends(get_current_employer)):
     notifications = await Notification.find(
@@ -526,132 +666,23 @@ async def get_employer_notifications(current_employer: Employer = Depends(get_cu
     
     return notifications
 
-@router.get("/download-resume/{worker_id}")
-async def download_worker_resume(
-    worker_id: str, 
+# --- UPDATE BILLING PROFILE (GSTIN) ---
+@router.put("/billing/profile")
+async def update_billing_profile(
+    profile_data: BillingProfileUpdateRequest,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    await SubscriptionService.check_quota(str(current_employer.id), action_type="download_resume")
-    
-    worker = await Employee.get(PydanticObjectId(worker_id))
-    if not worker: 
-        raise HTTPException(status_code=404, detail="Worker not found")
-
-    pdf_buffer = ResumeService.generate_pdf(worker)
-    
-    await SubscriptionService.increment_usage(str(current_employer.id), action_type="download_resume")
-    
-    safe_name = getattr(worker, 'name', 'Worker').replace(" ", "_")
-    
-    return StreamingResponse(
-        pdf_buffer, 
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=Resume_{safe_name}.pdf"}
-    )
-
-
-# =====================================================================
-# RATINGS & REVIEWS
-# =====================================================================
-
-@router.post("/rate-worker/{worker_id}")
-async def rate_worker(
-    worker_id: str, 
-    request: RateWorkerRequest, 
-    current_employer: Employer = Depends(get_current_employer)
-):
-    has_unlocked = await ContactUnlock.find_one({
-        "employer_id": current_employer.id,
-        "worker_id": ObjectId(worker_id)
-    })
-    
-    if not has_unlocked:
-        raise HTTPException(
-            status_code=403, 
-            detail="You can only leave a review for workers whose contact you have unlocked."
-        )
-
-    worker = await Employee.get(ObjectId(worker_id))
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found")
-
-    current_rating = getattr(worker, 'rating', 0.0)
-    
-    if current_rating == 0.0:
-        worker.rating = request.rating
-    else:
-        worker.rating = round((current_rating + request.rating) / 2, 1) 
-        
-    await worker.save()
-    
-    new_alert = Notification(
-        user_id=current_employer.id,
-        title="Review Submitted",
-        message=f"You successfully gave {worker.name} a {request.rating}-star review.",
-        is_read=False
-    )
-    await new_alert.save()
-
-    return {
-        "message": "Review submitted successfully!",
-        "worker": worker.name,
-        "new_rating": worker.rating
-    }
-
-
-# =====================================================================
-# PROFILE & ACCOUNT MANAGEMENT (SECURE)
-# =====================================================================
-
-@router.patch("/me/phone", status_code=status.HTTP_200_OK)
-async def update_employer_phone(
-    data: UpdatePhoneRequest,
-    current_employer: Employer = Depends(get_current_employer)
-):
-    clean_new_phone = data.new_phone[-10:]
-
-    if current_employer.phone == clean_new_phone:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="This is already your current phone number."
-        )
-
-    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
-                  await Employee.find_one({"phone": clean_new_phone})
-    
-    if phone_taken:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, 
-            detail="This phone number is already registered to another account."
-        )
-
-    otp_record = await OTP.find_one({"phone": clean_new_phone})
-    
-    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Invalid or expired OTP for the new phone number."
-        )
-
-    otp_record.hashed_code = None
-    await otp_record.save()
-
-    current_employer.phone = clean_new_phone
-    if hasattr(current_employer, "updated_at"):
-        current_employer.updated_at = datetime.utcnow()
+    """Updates the employer's GSTIN and billing address."""
+    if profile_data.gstin is not None:
+        current_employer.gstin = profile_data.gstin
+    if profile_data.billing_address is not None:
+        current_employer.billing_address = profile_data.billing_address
         
     await current_employer.save()
+    
+    return {"message": "Billing profile updated successfully", "gstin": current_employer.gstin}
 
-    return {
-        "status": "success", 
-        "message": "Phone number successfully updated.", 
-        "new_phone": current_employer.phone
-    }
-
-# ==========================================
-# CREDITS & USAGE (Virtual Coins Ledger)
-# ==========================================
-
+# --- CREDITS & USAGE (Virtual Coins Ledger) ---
 @router.get("/credits/transactions", response_model=List[TransactionResponse])
 async def get_credit_transactions(
     # Optional filter to match frontend tabs (Coins added, Coins spent, etc.)
@@ -681,10 +712,7 @@ async def get_credit_transactions(
         
     return response
 
-# ==========================================
-# BILLING HISTORY (Real Money Purchases)
-# ==========================================
-
+# --- BILLING HISTORY (Real Money Purchases) ---
 @router.get("/billing/history", response_model=List[PaymentResponse])
 async def get_billing_history(
     status_filter: Optional[str] = None, # "success", "pending", "failed"
@@ -706,29 +734,7 @@ async def get_billing_history(
         
     return response
 
-# ==========================================
-# UPDATE BILLING PROFILE (GSTIN)
-# ==========================================
-
-@router.put("/billing/profile")
-async def update_billing_profile(
-    profile_data: BillingProfileUpdateRequest,
-    current_employer: Employer = Depends(get_current_employer)
-):
-    """Updates the employer's GSTIN and billing address."""
-    if profile_data.gstin is not None:
-        current_employer.gstin = profile_data.gstin
-    if profile_data.billing_address is not None:
-        current_employer.billing_address = profile_data.billing_address
-        
-    await current_employer.save()
-    
-    return {"message": "Billing profile updated successfully", "gstin": current_employer.gstin}
-
-# ==========================================
-# REFERRAL DASHBOARD
-# ==========================================
-
+# --- REFERRAL DASHBOARD ---
 @router.get("/refer", response_model=ReferralDashboardResponse)
 async def get_referral_dashboard(
     current_employer: Employer = Depends(get_current_employer)

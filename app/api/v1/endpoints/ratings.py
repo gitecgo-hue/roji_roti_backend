@@ -23,31 +23,31 @@ class RatingCreate(BaseModel):
     """
     Schema for submitting 1-5 star feedback [cite: 215-216, 318].
     """
-    employee_id: str = Field(..., description="The ID of the worker being rated [cite: 316]")
+    employee_id: str = Field(..., description="The ID of the employee being rated [cite: 316]")
     rating_value: int = Field(..., ge=1, le=5, description="1 to 5 stars [cite: 216, 318]")
     comment: Optional[str] = Field(None, max_length=500, description="Feedback text [cite: 219, 319]")
 
 # --- Endpoints ---
 
 @router.post("/submit", status_code=status.HTTP_201_CREATED)
-async def submit_worker_rating(
+async def submit_employee_rating(
     data: RatingCreate,
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Allows an employer to rate a worker after hiring.
-    Triggers the mathematical recalculation engine to update the worker's 
+    Allows an employer to rate an employee after hiring.
+    Triggers the mathematical recalculation engine to update the employee's 
     average profile rating [cite: 222-223].
     """
-    # 1. Verify worker exists in the platform [cite: 259]
-    worker = await Employee.get(data.employee_id)
-    if not worker:
+    # 1. Verify employee exists in the platform [cite: 259]
+    employee = await Employee.get(data.employee_id)
+    if not employee:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Worker profile not found."
+            detail="Employee profile not found."
         )
 
-    # 2. Prevent duplicate ratings from the same employer for the same worker
+    # 2. Prevent duplicate ratings from the same employer for the same employee
     # This maintains the integrity of the search ranking system [cite: 222]
     existing_rating = await Rating.find_one(
         Rating.employee_id == data.employee_id,
@@ -56,7 +56,7 @@ async def submit_worker_rating(
     if existing_rating:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="You have already submitted feedback for this worker."
+            detail="You have already submitted feedback for this employee."
         )
 
     # 3. Save the new rating record 
@@ -74,13 +74,13 @@ async def submit_worker_rating(
     
     if all_ratings:
         total_score = sum(r.rating_value for r in all_ratings)
-        # Update the worker document with the rounded average 
-        worker.rating = round(total_score / len(all_ratings), 1)
-        await worker.save()
+        # Update the employee document with the rounded average 
+        employee.rating = round(total_score / len(all_ratings), 1)
+        await employee.save()
 
     return {
         "message": "Rating and feedback submitted successfully.",
-        "new_average": worker.rating,
+        "new_average": employee.rating,
         "rating_id": str(new_rating.id)
     }
 

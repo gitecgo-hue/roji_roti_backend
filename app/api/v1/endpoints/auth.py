@@ -1,31 +1,35 @@
-import re
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, status, Request, Depends
 from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel, Field
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from jose import jwt, JWTError
+import re
 
+# --- Cores Imports ---
 from app.core.limiter import limiter
 from app.core.config import settings
+from app.core.security import create_access_token
+
+# --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier
+from app.models.transaction import Transaction, TransactionType, TransactionStatus
 from app.models.admin import Admin
 from app.models.auth import OTP, TokenBlacklist
-from app.core.security import create_access_token
 from app.models.employee import Employee
 
-# --- IMPORT OUR NEW SERVICES & MODELS ---
+# --- Services Imports ---
 from app.services.otp import OTPService
+
+# --- Utilities Imports ---
 from app.utils.referral import generate_referral_code
-from app.models.transaction import Transaction, TransactionType, TransactionStatus
 
 router = APIRouter()
+
+# --- OAuth2 Scheme for Token Authentication ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-# ==============================================================================
-# PYDANTIC SCHEMAS
-# ==============================================================================
-
+# --- PYDANTIC SCHEMAS ---
 class AdminOTPRequest(BaseModel):
     identifier: str
 
@@ -48,11 +52,8 @@ class PublicVerifyRequest(BaseModel):
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
     referred_by_code: Optional[str] = None  # <-- Added for the Referral System
 
-# ==============================================================================
-# 1. ADMIN AUTHENTICATION
-# ==============================================================================
-
-@router.post("/admin/request-otp")
+# --- ADMIN AUTHENTICATION ENDPOINTS ---
+@router.post("/admin/request_otp")
 async def request_admin_otp(data: AdminOTPRequest): 
     clean_phone = data.identifier[-10:] 
     existing_admin = await Admin.find_one({"phone": clean_phone})
@@ -67,10 +68,7 @@ async def request_admin_otp(data: AdminOTPRequest):
         
     return response
 
-# ==============================================================================
-# 2. ADMIN LOGIN
-# ==============================================================================
-
+# --- ADMIN LOGIN ENDPOINTS ---
 @router.post("/admin/login", response_model=dict)
 @limiter.limit("5/minute")
 async def admin_login(data: AdminLoginRequest, request: Request):
@@ -91,11 +89,8 @@ async def admin_login(data: AdminLoginRequest, request: Request):
         "role": user.role, "user_name": user.name
     }
 
-# ==============================================================================
-# 3. THE STRICT SIGN-UP FLOW
-# ==============================================================================
-
-@router.post("/register/request-otp")
+# --- THE STRICT SIGN-UP FLOW ---
+@router.post("/register/request_otp")
 @limiter.limit("3/minute")
 async def request_signup_otp(data: RequestSignupOTP, request: Request):
     app_role = data.app_role.lower()
@@ -112,11 +107,8 @@ async def request_signup_otp(data: RequestSignupOTP, request: Request):
         
     return response
 
-# ==============================================================================
-# 4. VERIFY OTP DURING LOGIN
-# ==============================================================================
-
-@router.post("/register/verify-otp", response_model=dict)
+# --- VERIFY OTP DURING LOGIN ---
+@router.post("/register/verify_otp", response_model=dict)
 @limiter.limit("5/minute")
 async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
     """
@@ -127,24 +119,22 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
     app_role = data.app_role.lower()
     clean_phone = data.identifier[-10:]
     
-    # 1. Double check they didn't register in the last 5 minutes
+    # Double check they didn't register in the last 5 minutes
     user = await OTPService.get_user_by_identifier(data.identifier)
     if user:
         raise HTTPException(status_code=409, detail="Number already registered. Please Login.")
 
-    # 2. Fetch the OTP record FIRST to grab the temporarily saved Name
+    # Fetch the OTP record FIRST to grab the temporarily saved Name
     otp_record = await OTP.find_one({"phone": clean_phone})
     if not otp_record:
         raise HTTPException(status_code=400, detail="Please request an OTP first.")
     
     saved_name = otp_record.name or "Unknown User"
 
-    # 3. Verify and consume the OTP
+    # Verify and consume the OTP
     await OTPService.verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
 
-# =================================================================
-# 5. CREATE THE USER IN THE MAIN DATABASE IMMEDIATELY
-# =================================================================
+    # Create the new user record based on the app_role
     if app_role == "employee":
         new_user = Employee(
             phone=clean_phone,
@@ -159,7 +149,7 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
             is_active=True,
             employer_type=EmployerType.COMPANY, 
             subscription_tier=SubscriptionTier.FREE,
-            referral_code=generate_referral_code() # Generate their code
+            referral_code=generate_referral_code()
         )
         
         # Check if they used a friend's referral code
@@ -168,7 +158,7 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
             referrer = await Employer.find_one({"referral_code": data.referred_by_code})
             if referrer:
                 new_user.referred_by_code = data.referred_by_code
-                new_user.available_credits = 50  # Give new user a 50 coin head start!
+                new_user.available_credits = 50
 
         # Save the new employer to the database
         await new_user.insert()
@@ -213,11 +203,8 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
         "user_name": new_user.name
     }
 
-# ==============================================================================
-# 6. THE STRICT LOGIN FLOW
-# ==============================================================================
-
-@router.post("/login/request-otp")
+# --- THE STRICT LOGIN FLOW ---
+@router.post("/login/request_otp")
 @limiter.limit("3/minute")
 async def request_login_otp(data: PublicOTPRequest, request: Request):
     app_role = data.app_role.lower()
@@ -245,10 +232,7 @@ async def request_login_otp(data: PublicOTPRequest, request: Request):
         
     return response
 
-# ==============================================================================
-# 7. VERIFY OTP DURING LOGIN
-# ==============================================================================
-
+# --- VERIFY OTP DURING LOGIN ---
 @router.post("/login", response_model=dict)
 @limiter.limit("5/minute")
 async def login_verify(data: PublicVerifyRequest, request: Request):
@@ -276,10 +260,7 @@ async def login_verify(data: PublicVerifyRequest, request: Request):
         "user_name": getattr(user, "name", None) or getattr(user, "company_name", None)
     }
 
-# ==============================================================================
-# 8. SESSION MANAGEMENT
-# ==============================================================================
-
+# --- SESSION MANAGEMENT ENDPOINTS ---
 @router.post("/logout")
 async def logout(token: str = Depends(oauth2_scheme)):
     try:
@@ -296,11 +277,7 @@ async def logout(token: str = Depends(oauth2_scheme)):
 
     return {"status": "success", "message": "Successfully logged out."}
 
-
-# ==============================================================================
 # --- DELIVERY WEBHOOK ---
-# ==============================================================================
-
 @router.get("/webhooks/2factor", include_in_schema=False)
 @router.post("/webhooks/2factor", include_in_schema=False)
 async def twofactor_delivery_webhook(request: Request):

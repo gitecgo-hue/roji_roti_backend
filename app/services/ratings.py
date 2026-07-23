@@ -17,10 +17,10 @@ class RatingService:
         try:
             # 1. Fetch all ratings submitted for this specific user
             if user_type == "employee":
-                # Workers are rated by employers [cite: 214]
+                # employees are rated by employers [cite: 214]
                 ratings = await Rating.find(Rating.employee_id == user_id).to_list()
             else:
-                # Framework in place if you ever allow workers to rate employers
+                # Framework in place if you ever allow employees to rate employers
                 ratings = await Rating.find(Rating.employer_id == user_id).to_list()
 
             if not ratings:
@@ -34,10 +34,10 @@ class RatingService:
             object_id = ObjectId(user_id)
             
             if user_type == "employee":
-                worker = await Employee.get(object_id)
-                if worker:
-                    worker.rating = average_rating
-                    await worker.save()
+                employee = await Employee.get(object_id)
+                if employee:
+                    employee.rating = average_rating
+                    await employee.save()
             else:
                 employer = await Employer.get(object_id)
                 if employer and hasattr(employer, 'rating'):

@@ -7,8 +7,8 @@ class Rating(Document):
     """
     Stores feedback and star ratings provided by employers to employees.
     """
-    # Indexed strings ensure fast lookups when calculating worker averages
-    employee_id: Indexed(str)  # The worker being rated
+    # Indexed strings ensure fast lookups when calculating employee averages
+    employee_id: Indexed(str)  # The employee being rated
     employer_id: Indexed(str)  # The employer giving the rating
     
     # Strictly enforced 1-5 star scale

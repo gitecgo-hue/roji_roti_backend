@@ -4,14 +4,14 @@ from app.models.subscriptions import Subscription
 
 class ReportService:
     @staticmethod
-    async def get_daily_worker_stats():
-        """Calculates 'Worker going live every day' report."""
+    async def get_daily_employee_stats():
+        """Calculates 'Employee going live every day' report."""
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Total raw registrations today
         total_today = await Employee.find(Employee.created_at >= today).count()
         
-        # Workers who registered today AND are approved/visible
+        # Employees who registered today AND are approved/visible
         live_today = await Employee.find(
             Employee.created_at >= today,
             Employee.is_approved == True,
@@ -26,7 +26,7 @@ class ReportService:
 
     @staticmethod
     async def get_referral_stats():
-        """Aggregates the 'Referred Worker report' broken down by job category."""
+        """Aggregates the 'Referred Employee' report' broken down by job category."""
         # 1. Total count
         total_referred = await Employee.find(Employee.referred_by_id != None).count()
         
@@ -42,7 +42,7 @@ class ReportService:
         formatted_breakdown = {item["_id"]: item["count"] for item in category_breakdown}
         
         return {
-            "total_referred_workers": total_referred,
+            "total_referred_employees": total_referred,
             "referrals_by_category": formatted_breakdown
         }
 

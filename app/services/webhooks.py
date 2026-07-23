@@ -11,7 +11,7 @@ class WebhookService:
     async def trigger_event(event_type: str, data: dict):
         """
         Dispatches an event notification to all active partners with a registered webhook URL[cite: 354, 361].
-        Supported events include 'worker_registered', 'job_posted', and 'worker_hired' [cite: 355-359].
+        Supported events include 'employee_registered', 'job_posted', and 'employee_hired' [cite: 355-359].
         """
         # 1. Fetch active partners that have a listener URL configured
         partners = await Partner.find(

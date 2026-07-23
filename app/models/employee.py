@@ -143,8 +143,8 @@ class Employee(Document):
 class ApplicationStatus(str, Enum):
     # --- Initial Stages ---
     PENDING = "pending"           # Initial state or draft
-    APPLIED = "applied"           # Fresh application submitted by worker
-    CANCELLED = "cancelled"       # Withdrawn by the worker
+    APPLIED = "applied"           # Fresh application submitted by employee
+    CANCELLED = "cancelled"       # Withdrawn by the employee
     
     # --- Review Process ---
     SHORTLISTED = "shortlisted"   # Employer expressed interest

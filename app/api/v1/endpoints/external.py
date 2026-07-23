@@ -12,13 +12,13 @@ async def get_partner(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid API Key")
     return partner
 
-@router.post("/workers/register")
-async def external_worker_registration(data: dict, partner: Partner = Depends(get_partner)):
+@router.post("/employees/register")
+async def external_employee_registration(data: dict, partner: Partner = Depends(get_partner)):
     """
-    Allows partner apps to register workers directly[cite: 332, 340].
+    Allows partner apps to register employees directly[cite: 332, 340].
     """
     # ... logic to create employee ...
     
     # Trigger Webhook so other partners are notified
-    await WebhookService.trigger_event("worker_registered", {"phone": data["phone"]})
+    await WebhookService.trigger_event("employee_registered", {"phone": data["phone"]})
     return {"status": "registered", "partner": partner.name}

@@ -10,7 +10,7 @@ class SmsService:
     
     @classmethod
     async def send_job_alert(cls, phone_number: str, category: str, location: str, salary: str):
-        """Formats and sends a job alert SMS to a worker."""
+        """Formats and sends a job alert SMS to a employee."""
         # Note: In India, DLT registration requires strict SMS templates.
         message = f"Roji Roti Alert: New {category} job near {location}. Expected Salary: {salary}. Open the app to apply now!"
         

@@ -84,7 +84,7 @@ class EmployeeCreate(BaseModel):
     Combined from core requirements and validation constraints.
     """
     phone: str = Field(..., min_length=10, max_length=15, description="Mobile number (Required)")
-    name: str = Field(..., min_length=2, max_length=50, description="Worker name (Required)")
+    name: str = Field(..., min_length=2, max_length=50, description="Employee name (Required)")
     category: str = Field(..., description="Job Category (E.g., Driver, House Help)")
     password: str = Field(..., min_length=6, description="Password for account security (Required)")    
     
@@ -104,7 +104,7 @@ class EmployeeCreate(BaseModel):
     languages: List[str] = Field(default=["Hindi"], description="Supported languages")
     
     # Integrated expected_salary as str for maximum flexibility
-    expected_salary: Optional[str] = Field(None, description="Worker's salary expectation")
+    expected_salary: Optional[str] = Field(None, description="Employee's salary expectation")
     gender: Optional[str] = Field(None, description="Gender selection")
     email: Optional[EmailStr] = Field(None, description="Optional email address")
     
@@ -151,7 +151,7 @@ class EmployeeResponse(BaseModel):
 # --- Employee Dashboard Response Schema ---
 class EmployeeDashboardResponse(BaseModel):
     """
-    Schema for the worker-facing dashboard.
+    Schema for the employee-facing dashboard.
     Shows engagement metrics like total unlocks.
     """
     name: str

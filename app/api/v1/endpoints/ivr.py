@@ -11,20 +11,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # =====================================================================
-# 1. TRIGGER A CALL (Employer calling Worker securely)
+# 1. TRIGGER A CALL (Employer calling Employee securely)
 # =====================================================================
 
 @router.post("/connect-employer")
-async def connect_employer_to_worker(
+async def connect_employer_to_employee(
     employer_phone: str, 
-    worker_phone: str, 
+    employee_phone: str, 
     background_tasks: BackgroundTasks
 ):
     """
-    Frontend hits this endpoint when an Employer clicks "Call Worker".
+    Frontend hits this endpoint when an Employer clicks "Call Employee".
     Uses BackgroundTasks so the frontend doesn't freeze waiting for the telecom network.
     """
-    background_tasks.add_task(IVRService.trigger_click_to_call, employer_phone, worker_phone)
+    background_tasks.add_task(IVRService.trigger_click_to_call, employer_phone, employee_phone)
     
     return {
         "status": "success", 
@@ -70,22 +70,22 @@ async def ivr_webhook_receiver(request: Request, background_tasks: BackgroundTas
         
         # --- PRESS 1: FIND NEW JOBS ---
         if dtmf_input == "1":
-            worker = await Employee.find_one({"phone": clean_phone})
+            employee = await Employee.find_one({"phone": clean_phone})
             
-            if not worker or not getattr(worker, "is_approved", False):
+            if not employee or not getattr(employee, "is_approved", False):
                 logger.info("Unregistered or unapproved user pressed 1.")
                 return {"status": "received"}
 
-            worker_category = getattr(worker, "category", None) or getattr(worker, "trade_category", None)
+            employee_category = getattr(employee, "category", None) or getattr(employee, "trade_category", None)
             
-            if worker_category:
+            if employee_category:
                 # Query MongoDB for jobs matching category and location
                 query = {
-                    "category": re.compile(f"^{worker_category}$", re.IGNORECASE),
+                    "category": re.compile(f"^{employee_category}$", re.IGNORECASE),
                     "is_active": True
                 }
                 
-                location_name = getattr(worker, "location_name", None)
+                location_name = getattr(employee, "location_name", None)
                 if location_name:
                     query["$or"] = [
                         {"location": {"$regex": location_name, "$options": "i"}},
@@ -105,9 +105,9 @@ async def ivr_webhook_receiver(request: Request, background_tasks: BackgroundTas
 
         # --- PRESS 2: CHECK ACCOUNT STATUS ---
         elif dtmf_input == "2":
-            worker = await Employee.find_one({"phone": clean_phone})
-            if worker:
-                status = "ACTIVE" if getattr(worker, "is_approved", False) else "PENDING REVIEW"
+            employee = await Employee.find_one({"phone": clean_phone})
+            if employee:
+                status = "ACTIVE" if getattr(employee, "is_approved", False) else "PENDING REVIEW"
                 sms_message = f"Roji Roti: Your account status is currently {status}."
                 background_tasks.add_task(SMSService._send_to_provider, caller_phone, sms_message)
 

@@ -9,7 +9,7 @@ class AdminService:
         Aggregates key metrics for the Roji Roti dashboard.
         """
         # 1. Basic Counts
-        total_workers = await Employee.count()
+        total_employees = await Employee.count()
         total_employers = await Employer.count()
         total_jobs = await Job.count()
 
@@ -26,7 +26,7 @@ class AdminService:
 
         return {
             "overview": {
-                "workers": total_workers,
+                "employees": total_employees,
                 "employers": total_employers,
                 "active_jobs": total_jobs
             },

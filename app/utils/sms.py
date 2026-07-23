@@ -85,7 +85,7 @@ class SMSService:
 
     @staticmethod
     async def send_job_alert(phone: str, job_title: str, location: str):
-        """Notifies workers of relevant local jobs."""
+        """Notifies employees of relevant local jobs."""
         message = f"New Job Alert: {job_title} in {location}! Open Roji Roti to apply."
         return await SMSService._send_to_provider(phone, message)
 

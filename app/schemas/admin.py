@@ -5,7 +5,7 @@ from app.schemas.employee import EmployeeResponse
 
 class AdminDashboardStats(BaseModel):
     total_employers: int
-    total_workers: int
+    total_employees: int
     active_jobs: int
     pending_verifications: int
     # Breakdown of revenue by plan type
