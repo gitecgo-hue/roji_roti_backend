@@ -7,10 +7,9 @@ from enum import Enum
 class JobStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
-    PAUSED = "paused"
-    CLOSED = "closed"
     UNDER_REVIEW = "under_review"
-    EXPIRED = "expired"
+    CLOSED = "closed"
+
 
 class JobType(str, Enum):
     FULL_TIME = "full_time"
