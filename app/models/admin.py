@@ -7,7 +7,6 @@ class Admin(Document):
     name: str
     email: EmailStr
     phone: str
-    hashed_password: str
     
     # OTP fields for email fallback
     otp_code: Optional[str] = None
