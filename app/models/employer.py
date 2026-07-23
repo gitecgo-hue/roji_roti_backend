@@ -24,8 +24,7 @@ class Employer(Document):
     phone: Indexed(str, unique=True)
     phone_verified: bool = False
     email: Optional[EmailStr] = None
-    email_verified: bool = False  # <--- ADDED HERE
-    hashed_password: Optional[str] = None
+    email_verified: bool = False
     
     # --- Company Details ---
     name: Optional[str] = Field(None, description="Owner/Contact Name")

@@ -71,7 +71,6 @@ class EmployerCompleteProfileRequest(BaseModel):
     # Personal Details
     name: Optional[str] = Field(None, min_length=2, max_length=50)
     email: Optional[EmailStr] = None
-    password: Optional[str] = None  # Needed for hashing on first setup
     
     # Company Details
     company_name: Optional[str] = None

@@ -4,7 +4,6 @@ import string
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from app.core.config import settings
-from app.core.security import get_password_hash, verify_password
 from app.models.auth import OTP
 from app.models.admin import Admin
 from app.models.employee import Employee
@@ -38,7 +37,7 @@ class OTPService:
                 raise HTTPException(status_code=404, detail="Email not registered.")
             if not getattr(user, "otp_code") or user.otp_code != otp_code:
                 raise HTTPException(status_code=400, detail="Invalid Email OTP.")
-            if user.otp_expires_at < datetime.utcnow():
+            if getattr(user, "otp_expires_at") and user.otp_expires_at < datetime.utcnow():
                 raise HTTPException(status_code=400, detail="Email OTP expired.")
             
             user.otp_code = None
@@ -47,10 +46,12 @@ class OTPService:
         else:
             clean_phone = identifier[-10:]
             otp_record = await OTP.find_one({"phone": clean_phone})
-            if not otp_record or not otp_record.hashed_code or not verify_password(otp_code, otp_record.hashed_code):
+            
+            # --- NO MORE HASHING: Direct string comparison ---
+            if not otp_record or not otp_record.code or otp_record.code != otp_code:
                 raise HTTPException(status_code=400, detail="Invalid or expired SMS OTP.")
             
-            otp_record.hashed_code = None
+            otp_record.code = None
             await otp_record.save()
 
     @staticmethod
@@ -80,7 +81,6 @@ class OTPService:
             return "email", otp_code
         else:
             clean_phone = identifier[-10:]
-            hashed_otp = get_password_hash(otp_code)
             
             if user:
                 user.last_otp_requested_at = now
@@ -95,7 +95,8 @@ class OTPService:
                 if otp_record.daily_count >= 10 and not is_debug:
                     raise HTTPException(status_code=429, detail="Daily SMS limit reached.")
                     
-                otp_record.hashed_code = hashed_otp
+                # --- Store the raw OTP directly ---
+                otp_record.code = otp_code
                 otp_record.user_type = app_role
                 otp_record.daily_count += 1
                 otp_record.last_request_date = now
@@ -105,7 +106,7 @@ class OTPService:
             else:
                 new_otp = OTP(
                     phone=clean_phone, 
-                    hashed_code=hashed_otp, 
+                    code=otp_code,  # --- Store the raw OTP directly ---
                     user_type=app_role, 
                     daily_count=1, 
                     last_request_date=now,

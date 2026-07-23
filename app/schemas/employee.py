@@ -86,7 +86,6 @@ class EmployeeCreate(BaseModel):
     phone: str = Field(..., min_length=10, max_length=15, description="Mobile number (Required)")
     name: str = Field(..., min_length=2, max_length=50, description="Employee name (Required)")
     category: str = Field(..., description="Job Category (E.g., Driver, House Help)")
-    password: str = Field(..., min_length=6, description="Password for account security (Required)")    
     
     # Location data for proximity-based matching
     location_name: str = Field(..., description="Human-readable location name (Required)")

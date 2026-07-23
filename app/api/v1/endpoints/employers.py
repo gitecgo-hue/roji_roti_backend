@@ -11,7 +11,6 @@ import re
 
 # --- Core Imports ---
 from app.core.config import settings
-from app.core.security import verify_password, get_password_hash
 
 # --- Dependencies Imports ---
 from app.api.dependencies import get_current_employer
@@ -62,7 +61,6 @@ router = APIRouter()
 class CompleteEmployerProfileRequest(BaseModel):
     company_name: str = Field(..., description="The name of the business")
     email: EmailStr
-    password: str = Field(..., min_length=6)
     company_address: str
     industry: Optional[str] = None
     company_size: Optional[str] = None
@@ -95,7 +93,7 @@ async def complete_employer_profile(
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Completes the employer's profile, including geocoding, password setup,
+    Completes the employer's profile, including geocoding
     and subscription initialization via bulk dynamic updates.
     """
     # Convert the incoming data into a dictionary, ignoring any fields the frontend didn't send
@@ -129,11 +127,6 @@ async def complete_employer_profile(
             # Clean up the old schema key if it was named 'company_address'
             if "company_address" in update_dict:
                 del update_dict["company_address"]
-
-    # Hash Password (if provided in the payload)
-    if "password" in update_dict:
-        # Remove the raw password from the dictionary and replace it with the hashed version
-        update_dict["hashed_password"] = get_password_hash(update_dict.pop("password"))
 
     # Dynamically apply all finalized fields to the database model
     for field, value in update_dict.items():

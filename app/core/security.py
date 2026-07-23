@@ -1,33 +1,15 @@
-import bcrypt
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
 from jose import jwt
+
+# --- Core Imports ---
 from app.core.config import settings
 
 # --- Configuration ---
 
 # This fixes the 'ImportError' in dependencies.py
 ALGORITHM = settings.ALGORITHM 
-
-# --- Password Helpers ---
-
-def get_password_hash(password: str) -> str:
-    """Hashes a password or OTP for secure database storage using direct bcrypt."""
-    # Generate a salt and hash the password
-    salt = bcrypt.gensalt()
-    hashed_bytes = bcrypt.hashpw(password.encode('utf-8'), salt)
-    
-    # Decode back to a string so it can be saved in MongoDB safely
-    return hashed_bytes.decode('utf-8')
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifies a plain password/OTP against the stored hash using direct bcrypt."""
-    # bcrypt requires bytes, so we encode both strings to utf-8 before checking
-    return bcrypt.checkpw(
-        plain_password.encode('utf-8'), 
-        hashed_password.encode('utf-8')
-    )
 
 # --- Token Generation ---
 

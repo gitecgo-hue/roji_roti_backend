@@ -123,7 +123,6 @@ class Employee(Document):
     verified_by_admin: bool = False
     
     # --- Legacy/Auth (Keeping for compatibility) ---
-    hashed_password: Optional[str] = None
     last_otp_requested_at: Optional[datetime] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)

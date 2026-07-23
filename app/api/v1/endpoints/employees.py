@@ -10,7 +10,7 @@ import re
 
 # --- Core Imports ---
 from app.core.config import settings
-from app.core.security import verify_password
+from app.core.security import create_access_token
 
 # --- Dependencies Imports ---
 from app.api.dependencies import get_current_employee, get_current_employer

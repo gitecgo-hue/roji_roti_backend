@@ -5,10 +5,8 @@ from typing import Optional
 
 class OTP(Document):
     # Indexed for fast lookups during login
-    phone: Indexed(str) 
-    
-    # Optional so we can clear it (set to None) after a successful login
-    hashed_code: Optional[str] = None  
+    phone: Optional[str]
+    code: Optional[str] = None
     
     user_type: str # "employee", "employer", or "admin"
     name: Optional[str] = None
