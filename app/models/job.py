@@ -1,15 +1,15 @@
-from beanie import Document, PydanticObjectId, Indexed
+from beanie import Document, Indexed
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime, timezone
 from enum import Enum
 
+# ---ENUMS (Matches UI & System States) ---
 class JobStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
     UNDER_REVIEW = "under_review"
-    CLOSED = "closed"
-
+    EXPIRED = "expired"
 
 class JobType(str, Enum):
     FULL_TIME = "full_time"
@@ -19,46 +19,90 @@ class JobType(str, Enum):
     TEMPORARY = "temporary"
     REMOTE = "remote"
 
-class SalaryRange(BaseModel):
-    min: Optional[float] = None
-    max: Optional[float] = None
-    currency: Optional[str] = "INR"
+class WorkLocationType(str, Enum):
+    WORK_FROM_OFFICE = "Work From Office"
+    WORK_FROM_HOME = "Work From Home"
+    FIELD_JOB = "Field Job"
 
+class PayType(str, Enum):
+    FIXED_ONLY = "Fixed Only"
+    FIXED_AND_INCENTIVE = "Fixed + Incentive"
+    INCENTIVE_ONLY = "Incentive Only"
+
+class MinimumEducation(str, Enum):
+    TENTH_PASS = "10th pass"
+    TWELFTH_PASS = "12th pass"
+    ITI = "ITI"
+    DIPLOMA = "Diploma"
+    GRADUATE = "Graduate"
+    POST_GRADUATE = "Post Graduate"
+
+class TotalExperience(str, Enum):
+    ANY = "Any"
+    EXPERIENCED_ONLY = "Experienced Only"
+    FRESHER_ONLY = "Fresher Only"
+
+class SkillPreference(str, Enum):
+    FLEXIBLE_WORKING_HOURS = "Flexible Working Hours"
+    WEEKLY_PAYOUT = "Weekly Payout"
+    OVERTIME_PAY = "Overtime Pay"
+    JOINING_BONUS = "Joining Bonus"
+    HEALTH_INSURANCE = "Health Insurance"
+
+class CommunicationPreference(str, Enum):
+    YES_TO_MYSELF = "Yes, to myself"
+    YES_TO_OTHER_RECRUITER = "Yes, to other recruiter"
+    NO_WILL_CONTACT_FIRST = "No, I will contact candidates first"
+
+# --- HELPER SCHEMAS ---
 class LocationPoint(BaseModel):
     type: str = "Point"
     coordinates: List[float] # [longitude, latitude]
 
+# --- BEANIE DATABASE MODEL ---
 class Job(Document):
     # --- Core Identifiers ---
     employer_id: Indexed(str)
-    title: str = Field(..., min_length=3)
+    job_title: str = Field(..., min_length=3)
     slug: Optional[Indexed(str)] = None
     
-    # --- Descriptions ---
-    short_description: Optional[str] = Field(None, max_length=300)
-    description: Optional[str] = None
-    
     # --- Categorization & Location ---
-    category: Optional[Indexed(str)] = None
-    location_name: Optional[str] = None
+    job_category: Indexed(str)
+    work_location_type: WorkLocationType
+    job_city: str
     locations: Optional[List[str]] = [] # Array of location strings
     location_point: Optional[LocationPoint] = None # For geospatial searches
     is_pan_india: bool = False
     
-    # --- Job Details ---
+    # --- Salary & Pay ---
+    pay_type: PayType
+    min_fixed_salary: Optional[float] = None
+    max_fixed_salary: Optional[float] = None
+    average_incentive: Optional[float] = None
+    
+    # --- Candidate Requirements ---
+    minimum_education: MinimumEducation
+    total_experience_required: TotalExperience
+    skills_preference: List[SkillPreference] = []
+    
+    # --- Interview & Contact ---
+    is_walk_in_interview: bool
+    address: str
+    communication_preferences: CommunicationPreference
+    
+    # --- Descriptions & Settings ---
+    job_description: Optional[str] = None
     job_type: Optional[JobType] = JobType.FULL_TIME
-    salary_range: Optional[SalaryRange] = None
-    required_experience: Optional[float] = Field(0.0, ge=0) # Minimum experience
-    skills: Optional[List[str]] = []
     
     # --- Status & Timestamps ---
     is_urgent: bool = False
+    is_active: bool = True
     status: JobStatus = JobStatus.DRAFT
     posted_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
-    # --- Analytics Counters (Optional but highly recommended) ---
+    # --- Analytics Counters ---
     applicants_count: int = 0
     views_count: int = 0
     shortlisted_count: int = 0
@@ -70,7 +114,7 @@ class Job(Document):
         name = "jobs"
         indexes = [
             "employer_id",
-            "category",
+            "job_category",
             "status",
             [("location_point.coordinates", "2dsphere")]
         ]

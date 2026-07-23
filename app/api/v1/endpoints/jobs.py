@@ -8,7 +8,7 @@ from bson import ObjectId
 import pymongo
 
 # ---- Import Models ---
-from app.models.job import Job, SalaryRange, JobStatus
+from app.models.job import Job, JobStatus
 from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
 from app.models.application import JobApplication
@@ -53,7 +53,7 @@ class JobSearchQuery(BaseModel):
 # EMPLOYER: JOB MANAGEMENT
 # =====================================================================
 
-@router.post("/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/create", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 async def create_job(
     job_data: JobCreateRequest,
     current_employer: Employer = Depends(get_current_employer)
@@ -64,41 +64,40 @@ async def create_job(
     # 1. Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
         employer_id=str(current_employer.id),
-        title=job_data.title,
-        short_description=job_data.short_description,
-        description=job_data.description,
-        category=job_data.category,
-        location_name=job_data.location_name,
-        locations=job_data.locations,
+        
+        # --- Basic Details ---
+        job_title=job_data.job_title,          
+        job_category=job_data.job_category,    
+        work_location_type=job_data.work_location_type,
+        job_city=job_data.job_city,            
+        locations=[job_data.job_city],         
+        
+        # --- Salary & Pay ---
+        pay_type=job_data.pay_type,
+        min_fixed_salary=job_data.min_fixed_salary,
+        max_fixed_salary=job_data.max_fixed_salary,
+        average_incentive=job_data.average_incentive,
+        
+        # --- Candidate Requirements ---
+        minimum_education=job_data.minimum_education,
+        total_experience_required=job_data.total_experience_required,
+        skills_preference=job_data.skills_preference, 
+        
+        # --- Interview & Contact ---
+        is_walk_in_interview=job_data.is_walk_in_interview,
+        address=job_data.address,
+        communication_preferences=job_data.communication_preferences,
+        
+        # --- Descriptions & Settings ---
+        job_description=job_data.job_description,
         is_pan_india=job_data.is_pan_india,
         job_type=job_data.job_type,
-        required_experience=job_data.required_experience,
-        skills=job_data.skills,
         is_urgent=job_data.is_urgent,
         status=job_data.status
     )
-
-    # 2. Handle nested objects like Salary Range
-    if job_data.salary_range:
-        new_job.salary_range = SalaryRange(
-            min=job_data.salary_range.min,
-            max=job_data.salary_range.max,
-            currency=job_data.salary_range.currency
-        )
-
-    # 3. If published immediately, set the posted_at time
-    if new_job.status == "published":
-        new_job.posted_at = datetime.now(timezone.utc)
-
-    # 4. Save to Database
+    
     await new_job.insert()
-
-    # 5. Return response (FastAPI handles mapping the _id to 'id' automatically based on our response schema)
-    response_dict = new_job.model_dump()
-    response_dict["id"] = str(new_job.id)
-    response_dict["employer_id"] = str(new_job.employer_id)
-
-    return response_dict
+    return new_job
     
 # =====================================================================
 # EMPLOYEE: JOB DISCOVERY & SEARCH

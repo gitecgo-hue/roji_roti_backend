@@ -1,10 +1,15 @@
 from pydantic import BaseModel, Field, model_validator
+from beanie import PydanticObjectId
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
 # --- Model Imports ---
-from app.models.job import JobStatus, JobType 
+from app.models.job import JobStatus, JobType
+from app.models.job import (
+    JobStatus, JobType, WorkLocationType, PayType, 
+    MinimumEducation, TotalExperience, SkillPreference, CommunicationPreference
+)
 
 # --- ENUMS & UTILITY SCHEMAS ---
 class SalaryRangeInput(BaseModel):
@@ -85,7 +90,6 @@ class JobCreateRequest(BaseModel):
     
     # --- Descriptions & Backend Settings ---
     job_description: Optional[str] = Field(None, title="Job description")
-    short_description: Optional[str] = Field(None, max_length=300)
     
     is_pan_india: bool = False
     job_type: Optional[JobType] = JobType.FULL_TIME
@@ -126,7 +130,7 @@ class JobCreateRequest(BaseModel):
 # --- RESPONSE & UPDATE SCHEMAS ---
 class JobResponse(JobCreateRequest):
     """Schema for sending the job data back to the frontend"""
-    id: str
+    id: PydanticObjectId
     employer_id: str
     slug: Optional[str] = None
     posted_at: Optional[datetime] = None
@@ -136,7 +140,7 @@ class JobResponse(JobCreateRequest):
 
 class JobDashboardResponse(BaseModel):
     """Schema for the Employer Dashboard job cards"""
-    id: str
+    id: PydanticObjectId
     job_title: str
     location_name: Optional[str] = None
     status: JobStatus
@@ -149,15 +153,69 @@ class JobDashboardResponse(BaseModel):
         from_attributes = True
 
 class JobUpdateRequest(BaseModel):
-    """Schema for updating an existing job post"""
-    job_title: Optional[str] = None
-    job_description: Optional[str] = None
-    job_city: Optional[str] = None
-    pay_type: Optional[PayType] = None
-    min_fixed_salary: Optional[float] = None
-    max_fixed_salary: Optional[float] = None
-    average_incentive: Optional[float] = None
-    total_experience_required: Optional[TotalExperience] = None
-    skills_preference: Optional[List[SkillPreference]] = None
-    job_type: Optional[JobType] = None 
-    is_active: Optional[bool] = None
+    """Schema for updating an existing job post. All fields are optional."""
+    
+    # --- Basic Details ---
+    job_title: Optional[str] = Field(None, min_length=3, title="Job title / Designation")
+    job_category: Optional[str] = Field(None, title="Job category")
+    work_location_type: Optional[WorkLocationType] = Field(None, title="Work location type")
+    job_city: Optional[str] = Field(None, title="Job city")
+    
+    # --- Salary & Pay ---
+    pay_type: Optional[PayType] = Field(None, title="What is the pay type?")
+    min_fixed_salary: Optional[float] = Field(None, title="Minimum fixed salary/month")
+    max_fixed_salary: Optional[float] = Field(None, title="Maximum fixed salary/month")
+    average_incentive: Optional[float] = Field(None, title="Average incentive/month")
+    
+    # --- Candidate Requirements ---
+    minimum_education: Optional[MinimumEducation] = Field(None, title="Minimum education")
+    total_experience_required: Optional[TotalExperience] = Field(None, title="Total experience required")
+    skills_preference: Optional[List[SkillPreference]] = Field(None, title="Skills preference")
+    
+    # --- Interview & Contact ---
+    is_walk_in_interview: Optional[bool] = Field(None, title="Is this a walk-in interview?")
+    address: Optional[str] = Field(None, title="Address")
+    communication_preferences: Optional[CommunicationPreference] = Field(None, title="Communication preferences")
+    
+    # --- Descriptions & Backend Settings ---
+    job_description: Optional[str] = Field(None, title="Job description")
+    
+    is_pan_india: Optional[bool] = None
+    job_type: Optional[JobType] = None
+    is_urgent: Optional[bool] = None
+    status: Optional[JobStatus] = None
+    is_active: Optional[bool] = None  # Specific to updates (e.g., pausing a job)
+
+    # ==========================================
+    # CONDITIONAL VALIDATION FOR UPDATES
+    # ==========================================
+    @model_validator(mode='after')
+    def validate_pay_fields(self) -> 'JobUpdateRequest':
+        """
+        Validates salary logic only if the frontend is attempting to change the pay_type.
+        """
+        # If pay_type is not being updated, skip validation
+        if self.pay_type is None:
+            return self
+
+        # Rule 1: Fixed Salary Checks
+        if self.pay_type in [PayType.FIXED_ONLY, PayType.FIXED_AND_INCENTIVE]:
+            if self.min_fixed_salary is None or self.max_fixed_salary is None:
+                raise ValueError("When updating to a fixed pay type, you must provide both min and max salary.")
+            if self.min_fixed_salary > self.max_fixed_salary:
+                raise ValueError("Minimum fixed salary cannot be greater than the maximum.")
+
+        # Rule 2: Incentive Checks
+        if self.pay_type in [PayType.FIXED_AND_INCENTIVE, PayType.INCENTIVE_ONLY]:
+            if self.average_incentive is None:
+                raise ValueError("When updating to an incentive pay type, average incentive must be provided.")
+
+        # Rule 3: Data Cleanup (Safety Measure)
+        if self.pay_type == PayType.FIXED_ONLY:
+            self.average_incentive = None
+            
+        if self.pay_type == PayType.INCENTIVE_ONLY:
+            self.min_fixed_salary = None
+            self.max_fixed_salary = None
+
+        return self
