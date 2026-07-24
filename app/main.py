@@ -1,22 +1,30 @@
+# --- Imports ---
+import os
 import asyncio
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# Rate Limiting Imports
+# --- Rate Limiting Imports ---
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
-from app.core.limiter import limiter 
 
+# --- Core Imports ---
+from app.core.limiter import limiter 
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.exceptions import initialize_exception_handlers 
+
+# --- Api Imports ---
 from app.api.v1.router import api_router
 from app.api.v1.endpoints import ivr
+
+# --- ENV Imports ---
 from dotenv import load_dotenv
 
 

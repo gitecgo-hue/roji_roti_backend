@@ -219,3 +219,10 @@ class JobUpdateRequest(BaseModel):
             self.max_fixed_salary = None
 
         return self
+
+class LocationInput(BaseModel):
+    address_text: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
