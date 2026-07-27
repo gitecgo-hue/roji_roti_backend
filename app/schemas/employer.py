@@ -9,23 +9,18 @@ from app.models.employer import EmployerType, SubscriptionTier
 
 # --- Employer Registration & Profile Schemas ---
 class EmployerCreate(BaseModel):
-    """Schema for Employer Registration."""
+    """Schema for Employer Registration (Initial Sign-up)."""
+    name: str = Field(..., min_length=2, max_length=50, description="Employer's personal name")
     phone: str = Field(..., min_length=10, max_length=15, description="Mobile number with country code")
-    employer_type: EmployerType
-    name: str = Field(..., min_length=2, max_length=50, description="Contact person or individual name")
-    location: str = Field(..., description="City or primary location")
     
-    # Company fields
+    # Make these optional so they aren't strictly required at step 1
+    employer_type: Optional[EmployerType] = None
+    location: Optional[str] = Field(None, description="City or primary location")
+    
+    # Company fields (Filled out later during profile completion)
     company_name: Optional[str] = None
     email: Optional[EmailStr] = None
     gst_number: Optional[str] = None
-
-    @model_validator(mode='after')
-    def check_company_fields(self) -> 'EmployerCreate':
-        if self.employer_type == EmployerType.COMPANY:
-            if not self.company_name or not self.gst_number:
-                raise ValueError('Company Name and GST Number are mandatory for Company accounts.')
-        return self
 
 class EmployerResponse(BaseModel):
     """Standard profile response for an Employer."""

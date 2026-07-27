@@ -1,4 +1,4 @@
-from beanie import Document, Indexed
+from beanie import Document, Indexed, before_event, Replace, Save, Update
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -27,7 +27,7 @@ class Employer(Document):
     email_verified: bool = False
     
     # --- Company Details ---
-    name: Optional[str] = Field(None, description="Owner/Contact Name")
+    name: str = Field(..., description="Owner/Contact Name")    
     company_name: Optional[str] = None
     description: Optional[str] = None
     logo_url: Optional[str] = None
@@ -65,6 +65,10 @@ class Employer(Document):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+    @before_event(Replace, Save, Update)
+    def update_timestamp(self):
+        self.updated_at = datetime.now(timezone.utc)
 
     class Settings:
         name = "employers"

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
 
+    # --- Referral Amount ---
+    REFERRAL_BONUS_AMOUNT: int = 50
+
     # Pydantic v2 Configuration
     model_config = SettingsConfigDict(
         env_file=".env",
