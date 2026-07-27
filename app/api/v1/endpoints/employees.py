@@ -35,11 +35,12 @@ from app.models.contact import ContactUnlock
 from app.models.job import Job 
 from app.models.payment import Payment 
 from app.models.review import Review 
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationType
 from app.models.auth import OTP 
 from app.models.category import Category
 
 # --- Services Imports ---
+from app.services.notification import NotificationService
 from app.services.email import EmailService
 from app.services.webhooks import WebhookService 
 from app.services.resumes import ResumeService
@@ -497,7 +498,7 @@ async def get_job_feed():
 @router.post("/jobs/apply/{job_id}", status_code=status.HTTP_201_CREATED)
 async def apply_for_job(
     job_id: str,
-    current_employee: Employee = Depends(get_current_employee)
+    current_employee = Depends(get_current_employee)
 ):
     """
     Employee expresses interest in a specific job post and notifies the employer.
@@ -514,23 +515,30 @@ async def apply_for_job(
         "employee_id": current_employee.id,
         "job_id": job.id
     })
+    
     if existing_application:
         raise HTTPException(status_code=400, detail="You have already applied for this job.")
 
+    # 1. Create the application
     new_app = JobApplication(
         job_id=job.id,
         employee_id=current_employee.id,
         employer_id=job.employer_id, 
         status=ApplicationStatus.APPLIED
     )
-    await new_app.insert() 
+    
+    # 2. SAVE THE APPLICATION TO THE DATABASE (This was missing!)
+    await new_app.insert()
 
-    new_notif = Notification(
-        user_id=job.employer_id,
-        title="New Applicant!",
-        message=f"{current_employee.name} has applied for your '{job.title}' job."
+    # 3. Send the notification to the employer
+    # Wrapping employer_id in str() ensures compatibility if job.employer_id is an ObjectId
+    await NotificationService.notify_user(
+        employer_id=str(job.employer_id),
+        title="New Application Received!",
+        message=f"{current_employee.name} just applied for your {job.title} role.",
+        notif_type=NotificationType.NEW_APPLICANT,
+        related_entity_id=str(job.id)
     )
-    await new_notif.insert()
 
     return {"message": "Application submitted successfully!", "status": new_app.status}
 

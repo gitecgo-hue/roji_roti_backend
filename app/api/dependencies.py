@@ -63,13 +63,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     return {"id": user_id, "user_type": user_type}
 
-# ==============================================================================
-# --- BULLETPROOF ROLE GUARDS ---
-# ==============================================================================
-
+# --- ROLE GUARDS ---
 async def get_current_employer(user_info: dict = Depends(get_current_user)) -> Employer:
     """Ensures the user is an Employer and exists in the database."""
-    # 🛑 Prevent 500 errors by checking if the ID is a valid MongoDB ObjectId
     if not ObjectId.is_valid(user_info["id"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
@@ -85,8 +81,7 @@ async def get_current_employer(user_info: dict = Depends(get_current_user)) -> E
     return employer
 
 async def get_current_employee(user_info: dict = Depends(get_current_user)) -> Employee:
-    """Ensures the user is a employee (Employee) and exists in the database."""
-    # 🛑 Prevent 500 errors
+    """Ensures the user is an employee (Employee) and exists in the database."""
     if not ObjectId.is_valid(user_info["id"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
@@ -111,7 +106,6 @@ async def get_current_admin(user_info: dict = Depends(get_current_user)) -> Admi
             detail="Access denied. System Administrator privileges required."
         )
         
-    # 🛑 Prevent 500 errors
     if not ObjectId.is_valid(user_info["id"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
@@ -127,3 +121,35 @@ async def get_current_admin(user_info: dict = Depends(get_current_user)) -> Admi
         )
         
     return admin_user
+
+async def get_any_current_user(user_info: dict = Depends(get_current_user)) -> str:
+    """
+    UNIVERSAL GUARD: Authenticates the user as either an Employer or an Employee.
+    Returns the user's ID string if successful.
+    """
+    if not ObjectId.is_valid(user_info["id"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid token format."
+        )
+
+    # Route the database check based on the token's user_type
+    if user_info["user_type"] == "employer":
+        user = await Employer.get(user_info["id"])
+    elif user_info["user_type"] == "employee":
+        user = await Employee.get(user_info["id"])
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Access denied. Employer or Employee credentials required."
+        )
+
+    # Ensure the user actually still exists in the database
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="User account not found. Please log in again."
+        )
+
+    # Return the clean string ID for your notification router to use
+    return str(user.id)

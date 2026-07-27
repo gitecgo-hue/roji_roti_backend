@@ -1,5 +1,18 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import employees, employers, auth, ivr, jobs, location, ratings, feedback, admin, payments
+from app.api.v1.endpoints import (
+    employees,
+    employers,
+    auth,
+    ivr,
+    jobs,
+    location,
+    notification,
+    ratings,
+    feedback,
+    admin,
+    payments,
+    websocket
+    )
 
 api_router = APIRouter()
 
@@ -20,6 +33,9 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
 
 # Attach the location endpoints
 api_router.include_router(location.router, prefix="/location", tags=["Location"])
+
+# Attach the notification endpoints
+api_router.include_router(notification.router, prefix="/notification", tags=["Notification"])
 
 # Attach the ratings endpoints
 api_router.include_router(ratings.router, prefix="/ratings", tags=["Ratings"])

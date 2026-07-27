@@ -8,6 +8,7 @@ from bson import ObjectId
 import pymongo
 
 # ---- Import Models ---
+from app.models.notification import Notification, NotificationType
 from app.models.job import Job, JobStatus
 from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
@@ -29,10 +30,11 @@ from app.schemas.job import (
 from app.api.dependencies import get_current_employer, get_current_employee
 
 # --- Import Services ---
+from app.services.notification import NotificationService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService 
 from app.services.webhooks import WebhookService
-from app.services.notifications import NotificationService 
+from app.services.notification import NotificationService 
 
 # --- Import Utilities ---
 from app.utils.geocoding import get_coordinates_from_name 

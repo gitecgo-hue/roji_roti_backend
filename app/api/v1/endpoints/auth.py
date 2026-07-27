@@ -14,11 +14,13 @@ from app.core.security import create_access_token
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
+from app.models.notification import Notification, NotificationType
 from app.models.admin import Admin
 from app.models.auth import OTP, TokenBlacklist
 from app.models.employee import Employee
 
 # --- Services Imports ---
+from app.services.notification import NotificationService
 from app.services.otp import OTPService
 
 # --- Utilities Imports ---
@@ -244,13 +246,25 @@ async def login_verify(data: PublicVerifyRequest, request: Request):
         raise HTTPException(status_code=404, detail="Account not found. Please register.")
         
     actual_role = "employer" if isinstance(user, Employer) else "employee"
+    
     if not getattr(user, "is_active", True):
         raise HTTPException(status_code=403, detail="Account is suspended.")
 
+    # Verify the OTP
     await OTPService.verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
     
+    # Generate the Token
     access_token = create_access_token(subject=str(user.id), user_type=actual_role)
+
+    # Fire the Security Notification ONLY for employers
+    await NotificationService.notify_user(
+        user_id=str(user.id),
+        title="New Login Detected",
+        message="Your account was just accessed.",
+        notif_type=NotificationType.SECURITY_LOGIN
+    )
     
+    # Return success response
     return {
         "status": "success",
         "access_token": access_token, 

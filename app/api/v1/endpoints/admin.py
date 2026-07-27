@@ -9,6 +9,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.api.dependencies import get_current_admin
 
 # --- Services Imports ---
+from app.services.notification import NotificationService
 from app.services.admin import AdminService
 from app.services.reports import ReportService 
 from app.services.audit import AuditService
@@ -22,6 +23,7 @@ from app.models.webhook import WebhookSubscription
 from app.models.promo import PromoCode
 from app.models.payment import Payment 
 from app.models.audit import AuditLog
+from app.models.notification import Notification, NotificationType
 from app.models.employee import Employee
 from app.models.employer import (
     Employer,
@@ -163,7 +165,7 @@ async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
 async def admin_update_kyc_status(
     employer_id: str, 
     data: AdminKYCStatusUpdate,
-    admin_user = Depends(get_current_admin) # Ensure only admins access this
+    admin_user = Depends(get_current_admin)
 ):
     employer = await Employer.get(employer_id)
     if not employer:
@@ -175,23 +177,31 @@ async def admin_update_kyc_status(
     employer.verified_by = VerificationSource.ADMIN
     employer.verified_at = datetime.now(timezone.utc)
     
-    # Sync with your global boolean flag
+    # Sync with global boolean flag
     employer.is_verified = (data.status == KYCStatus.VERIFIED)
 
+    # Save the update to the database first
     await employer.save()
+
+    # Fire the notification to the employer
+    await NotificationService.notify_user(
+        employer_id=employer_id,
+        title="KYC Status Updated",
+        message=f"Your KYC document has been {data.status.value if hasattr(data.status, 'value') else data.status} by our team.",
+        notif_type=NotificationType.KYC_UPDATE
+    )
 
     return {
         "status": "success",
         "message": f"Employer KYC status forcefully updated to {data.status} by Admin.",
         "employer_id": employer_id
     }
-    
+
 @router.get("/kyc/pending")
 async def get_pending_kyc_applications(admin_user = Depends(get_current_admin)):
     """Fetches all employers who failed auto-verify and need manual review."""
     pending_employers = await Employer.find({"kyc_status": KYCStatus.PENDING}).to_list()
     return pending_employers
-
 
 # =====================================================================
 # APPROVAL WORKFLOWS

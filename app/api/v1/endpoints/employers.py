@@ -20,7 +20,7 @@ from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCSta
 from app.models.employee import Employee
 from app.models.subscriptions import Subscription
 from app.models.transaction import Transaction
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationType
 from app.models.contact import ContactUnlock
 from app.models.payment import Payment
 from app.models.review import Review 
@@ -30,6 +30,7 @@ from app.models.saved_search import SavedSearch
 from app.models.application import JobApplication, ApplicationStatus
 
 # --- Service Imports ---
+from app.services.notification import NotificationService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
@@ -81,7 +82,7 @@ class RateEmployeeRequest(BaseModel):
     comment: str
 
 class ApplicationStatusUpdate(BaseModel):
-    new_status: ApplicationStatus
+    new_status: ApplicationStatus | str
 
 class UpdatePhoneRequest(BaseModel):
     new_phone: str = Field(..., description="The new 10-digit mobile number")
@@ -457,6 +458,7 @@ async def update_application_status(
     request: ApplicationStatusUpdate, 
     current_employer: Employer = Depends(get_current_employer)
 ):
+    # Validate and fetch the application
     try:
         app_record = await JobApplication.get(PydanticObjectId(application_id))
     except Exception:
@@ -465,6 +467,7 @@ async def update_application_status(
     if not app_record:
         raise HTTPException(status_code=404, detail="Application not found")
 
+    # Fetch the job and verify ownership
     job = await Job.get(PydanticObjectId(app_record.job_id))
     if not job or str(job.employer_id) != str(current_employer.id):
         raise HTTPException(
@@ -472,29 +475,51 @@ async def update_application_status(
             detail="Unauthorized to update this application."
         )
 
+    # Update application status
     app_record.status = request.new_status
     if hasattr(app_record, "updated_at"):
         app_record.updated_at = datetime.utcnow()
     await app_record.save()
 
+    # Safely get the string value of the status (handles both Enum and standard string)
+    status_str = request.new_status.value if hasattr(request.new_status, 'value') else request.new_status
     job_closed = False
-    if request.new_status == ApplicationStatus.HIRED:
+
+    # Handle "HIRED" logic (closing the job)
+    if status_str.lower() == "hired":
         job.is_active = False
         if hasattr(job, "status"):
             job.status = "closed"
         await job.save()
         job_closed = True
 
-        new_notif = Notification(
-            user_id=app_record.employee_id,
-            title="Hired!",
-            message=f"Congratulations! You have been hired for the '{job.title}' role.",
-            is_read=False
-        )
-        await new_notif.save()
+    # Determine the notification title and message dynamically
+    job_title = job.title if job else "a recent job"
+    
+    if status_str.lower() == "hired":
+        title = "Hired! 🎉"
+        message = f"Congratulations! You have been hired for the '{job_title}' role."
+    elif status_str.lower() == "accepted":
+        title = "Great News! Application Accepted 🎉"
+        message = f"Your application for '{job_title}' has been accepted. The employer will contact you soon."
+    elif status_str.lower() == "rejected":
+        title = "Application Update"
+        message = f"Unfortunately, the employer has decided to move forward with other candidates for '{job_title}'."
+    else:
+        title = "Application Status Updated"
+        message = f"Your application for '{job_title}' is now marked as {status_str}."
+
+    # Fire the unified notification via the Service
+    await NotificationService.notify_user(
+        user_id=str(app_record.employee_id),
+        title=title,
+        message=message,
+        notif_type=NotificationType.APPLICATION_UPDATE,
+        related_entity_id=str(app_record.id)
+    )
 
     return {
-        "message": f"Candidate status updated to {request.new_status.value if hasattr(request.new_status, 'value') else request.new_status}",
+        "message": f"Candidate status updated to {status_str}",
         "application_id": application_id,
         "job_closed": job_closed
     }
@@ -685,14 +710,14 @@ async def rate_employee(
         "new_rating": employee.rating
     }
 
-# --- NOTIFICATIONS & RESUMES ---
+# --- NOTIFICATIONS ---
 @router.get("/notifications")
-async def get_employer_notifications(current_employer: Employer = Depends(get_current_employer)):
-    notifications = await Notification.find(
+async def get_employer_notification(current_employer: Employer = Depends(get_current_employer)):
+    notification = await Notification.find(
         Notification.user_id == current_employer.id 
     ).sort("-created_at").limit(20).to_list()
     
-    return notifications
+    return notification
 
 # --- UPDATE BILLING PROFILE (GSTIN) ---
 @router.put("/billing/profile")
