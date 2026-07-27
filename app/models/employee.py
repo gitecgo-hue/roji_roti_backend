@@ -120,7 +120,6 @@ class Employee(Document):
     metadata: Optional[ProfileMetadata] = Field(default_factory=ProfileMetadata)
     status: AdminStatus = AdminStatus.ACTIVE
     admin_notes: Optional[str] = None
-    verified_by_admin: bool = False
     
     # --- Legacy/Auth (Keeping for compatibility) ---
     last_otp_requested_at: Optional[datetime] = None

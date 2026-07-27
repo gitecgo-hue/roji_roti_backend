@@ -1,8 +1,18 @@
 from beanie import Document, Indexed, before_event, Replace, Save, Update
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from enum import Enum
+
+class KYCStatus(str, Enum):
+    UNVERIFIED = "unverified"
+    PENDING = "pending"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+class VerificationSource(str, Enum):
+    SYSTEM = "system"
+    ADMIN = "admin"
 
 class EmployerType(str, Enum):
     COMPANY = "company"
@@ -44,6 +54,13 @@ class Employer(Document):
     gstin: Optional[str] = None
     billing_address: Optional[str] = None
     available_credits: int = 0
+
+    # --- KYC & Verification ---
+    kyc_status: KYCStatus = KYCStatus.UNVERIFIED
+    kyc_documents: Optional[Dict[str, str]] = None  # e.g., {"pan_number": "ABCDE1234F", "document_url": "https://s3..."}
+    kyc_remarks: Optional[str] = None               # Why it failed or admin notes
+    verified_by: Optional[VerificationSource] = None 
+    verified_at: Optional[datetime] = None
     
     # --- Location Data ---
     address: Optional[str] = None

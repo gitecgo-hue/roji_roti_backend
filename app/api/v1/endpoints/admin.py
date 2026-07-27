@@ -1,28 +1,39 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from bson import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, EmailStr, Field
 
-# Models & Services
+# --- Dependency Imports ---
+from app.api.dependencies import get_current_admin
+
+# --- Services Imports ---
 from app.services.admin import AdminService
 from app.services.reports import ReportService 
-from app.services.audit import AuditService 
-from app.models.employee import Employee
-from app.models.employer import Employer, EmployerType, SubscriptionTier
-from app.models.admin import Admin  # <--- Added Admin Model Import
+from app.services.audit import AuditService
+
+# --- Model Imports ---
+from app.models.admin import Admin  
 from app.models.job import Job
 from app.models.subscriptions import Subscription
 from app.models.category import Category
 from app.models.webhook import WebhookSubscription
 from app.models.promo import PromoCode
 from app.models.payment import Payment 
-from app.models.audit import AuditLog  # Moved to top-level for consistency
-from app.api.dependencies import get_current_admin
+from app.models.audit import AuditLog
+from app.models.employee import Employee
+from app.models.employer import (
+    Employer,
+    EmployerType,
+    SubscriptionTier,
+    VerificationSource,
+    KYCStatus
+)
 
-# Schemas
+# --- Schema Imports ---
 from app.schemas.admin import AdminDashboardStats
+from app.schemas.employer import AdminKYCStatusUpdate
 from app.schemas.report import ComprehensiveReport
 
 router = APIRouter()
@@ -148,91 +159,38 @@ async def get_detailed_reports(admin: Admin = Depends(get_current_admin)):
 # =====================================================================
 # KYC MANAGEMENT
 # =====================================================================
+@router.patch("/kyc/{employer_id}/status")
+async def admin_update_kyc_status(
+    employer_id: str, 
+    data: AdminKYCStatusUpdate,
+    admin_user = Depends(get_current_admin) # Ensure only admins access this
+):
+    employer = await Employer.get(employer_id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer not found")
 
+    # Apply the Admin's absolute decision
+    employer.kyc_status = data.status
+    employer.kyc_remarks = data.remarks
+    employer.verified_by = VerificationSource.ADMIN
+    employer.verified_at = datetime.now(timezone.utc)
+    
+    # Sync with your global boolean flag
+    employer.is_verified = (data.status == KYCStatus.VERIFIED)
+
+    await employer.save()
+
+    return {
+        "status": "success",
+        "message": f"Employer KYC status forcefully updated to {data.status} by Admin.",
+        "employer_id": employer_id
+    }
+    
 @router.get("/kyc/pending")
-async def get_pending_kyc_queue(current_admin: Admin = Depends(get_current_admin)):
-    """
-    Retrieves all employee profiles currently waiting for manual KYC review.
-    """
-    pending_employees = await Employee.find({"kyc_status": "PENDING_REVIEW"}).sort("updated_at").to_list()
-    
-    return [{
-        "employee_id": str(employee.id),
-        "name": employee.name,
-        "phone": employee.phone,
-        "category": employee.category,
-        "kyc_document_url": employee.kyc_document_url, # The blurry image URL
-        "failed_attempts": employee.kyc_attempts
-    } for employee in pending_employees]
-
-
-@router.patch("/kyc/{employee_id}/approve")
-async def manual_kyc_approve(
-    employee_id: str,
-    id_type: str = Body(..., description="Must be 'AADHAAR' or 'PAN'"),
-    extracted_number: str = Body(..., description="The ID number the admin manually read from the image"),
-    current_admin: Admin = Depends(get_current_admin)
-):
-    """
-    Admin manually overrides a failed OCR attempt, inputs the correct ID number, and approves the employee.
-    """
-    employee = await Employee.get(ObjectId(employee_id))
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found.")
-
-    if employee.kyc_status == "VERIFIED":
-        raise HTTPException(status_code=400, detail="Employee is already verified.")
-
-    # 1. Save the manually extracted data
-    if id_type == "AADHAAR":
-        employee.adhar_card_number = extracted_number
-    else:
-        employee.pan_card = extracted_number
-
-    # 2. Update their status
-    employee.kyc_status = "VERIFIED"
-    employee.is_approved = True
-
-    # Optional: Clear the document URL if you don't want to store PII long-term
-    # employee.kyc_document_url = None
-
-    await employee.save()
-
-    # 3. Notify the employee
-    # await SmsService.send_sms(employee.phone, "Great news! Your Roji Roti account has been manually verified and is now active. You can now apply for jobs!")
-
-    return {"status": "success", "message": f"Employee {employee.name} has been successfully verified."}
-
-
-@router.patch("/kyc/{employee_id}/reject")
-async def manual_kyc_reject(
-    employee_id: str,
-    reason: str = Body(..., description="Reason for rejection to send to the employee"),
-    current_admin: Admin = Depends(get_current_admin)
-):
-    """
-    Admin rejects the document because it is completely unreadable or fraudulent.
-    Resets the employee's attempt counter so they can try uploading again.
-    """
-    employee = await Employee.get(ObjectId(employee_id))
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found.")
-
-    # 1. Reset their KYC state
-    employee.kyc_status = "UNVERIFIED"
-    employee.kyc_attempts = 0 # Give them 3 fresh attempts!
-    
-    # 2. Delete the bad image to save cloud storage space
-    # await StorageService.delete_kyc_doc(employee.kyc_document_url)
-    employee.kyc_document_url = None
-
-    await employee.save()
-
-    # 3. Notify the employee
-    notification_msg = f"Your recent ID upload was rejected: {reason}. Please log back into the app and take a clear, well-lit photo of your ID."
-    # await SmsService.send_sms(employee.phone, notification_msg)
-
-    return {"status": "success", "message": f"Employee {employee.name}'s document rejected. They have been notified to try again."}
+async def get_pending_kyc_applications(admin_user = Depends(get_current_admin)):
+    """Fetches all employers who failed auto-verify and need manual review."""
+    pending_employers = await Employer.find({"kyc_status": KYCStatus.PENDING}).to_list()
+    return pending_employers
 
 
 # =====================================================================
@@ -262,27 +220,6 @@ async def verify_employer_gst(employer_id: str, admin: Admin = Depends(get_curre
     )
     
     return {"message": f"Employer {employer.company_name} verified successfully."}
-
-@router.put("/approve-employee/{employee_id}")
-async def approve_employee_profile(employee_id: str, admin: Admin = Depends(get_current_admin)):
-    """ Approves an employee, making them visible in searches. """
-    employee = await Employee.get(ObjectId(employee_id))
-    if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    employee.is_approved = True
-    await employee.save()
-    
-    await AuditService.log_action(
-        admin=admin,
-        action="APPROVE_EMPLOYEE",
-        target_id=employee_id,
-        target_type="employee",
-        details=f"Approved employee profile for {employee.name}"
-    )
-    
-    return {"message": f"Employee {employee.name} approved."}
-
 
 # =====================================================================
 # SYSTEM CONFIGURATION & MODERATION

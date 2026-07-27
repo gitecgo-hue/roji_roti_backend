@@ -1,11 +1,10 @@
 from pydantic import BaseModel, EmailStr, Field, model_validator, ConfigDict
 from typing import Dict, Optional, List
 from datetime import datetime
-from app.models.employer import EmployerType, SubscriptionTier
 
-#==========================================
-# EMPLOYER SCHEMAS
-#=========================================
+# --- Model Imports ---
+from app.models.employer import EmployerType, SubscriptionTier
+from app.models.employer import KYCStatus
 
 # --- Employer Registration & Profile Schemas ---
 class EmployerCreate(BaseModel):
@@ -105,6 +104,16 @@ class EmployerProfileUpdateRequest(BaseModel):
     description: Optional[str] = None
     social_profiles: Optional[Dict[str, str]] = None
     address: Optional[str] = None
+
+# --- Employer Kyc Detils ---
+class KYCSubmitRequest(BaseModel):
+    document_type: str        # e.g., "PAN", "GSTIN", "AADHAAR"
+    document_number: str
+    document_url: str         # URL to uploaded image/pdf
+
+class AdminKYCStatusUpdate(BaseModel):
+    status: KYCStatus
+    remarks: Optional[str] = None
 
 # --- Specific Responses ---
 class ReferralDashboardResponse(BaseModel):

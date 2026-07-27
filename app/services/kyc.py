@@ -1,31 +1,26 @@
 import httpx
 import logging
 
+
 logger = logging.getLogger(__name__)
 
 class KYCService:
     @staticmethod
-    async def verify_id_document(file_bytes: bytes, id_type: str = "AADHAAR") -> dict:
+    async def automated_verify(document_data: dict) -> tuple[bool, str]:
         """
-        Takes the uploaded image bytes, sends it to the KYC Provider (e.g., Cashfree/Surepass),
-        extracts the data, and verifies it against the government database.
+        Simulates an automated KYC check (e.g., GSTIN or PAN lookup).
+        Returns a tuple: (is_successful: bool, remarks: str)
         """
-        # =====================================================================
-        # 🛑 THIS IS A MOCK IMPLEMENTATION FOR DEVELOPMENT
-        # In production, you will replace this with a real httpx POST request 
-        # to your chosen provider's OCR/Verification API endpoint.
-        # =====================================================================
+        doc_number = document_data.get("document_number", "")
         
-        logger.info(f"Simulating OCR and Government API check for {id_type}...")
-        
-        # Simulate network delay for the API call
-        import asyncio
-        await asyncio.sleep(2) 
-        
-        # We are mocking a successful extraction and verification response
-        return {
-            "status": "VERIFIED", # Providers usually return VERIFIED, REJECTED, or BLURRY
-            "extracted_number": "1234 5678 9012" if id_type == "AADHAAR" else "ABCDE1234F",
-            "extracted_name": "Ram Kumar",
-            "confidence_score": 0.98
-        }
+        # Example Automated Logic: 
+        # Let's say valid PAN cards are 10 chars, or GSTINs are 15 chars.
+        if not doc_number:
+            return False, "Missing document number for automated verification."
+            
+        if len(doc_number) == 10 or len(doc_number) == 15:
+            # Simulate a successful third-party API call
+            return True, "Automated verification successful."
+            
+        # If the automated system fails, it returns False so it goes to Admin
+        return False, "Automated system could not verify the document format."

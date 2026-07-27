@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field
 from beanie import PydanticObjectId
 from bson import ObjectId
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import uuid
 import re
@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.api.dependencies import get_current_employer
 
 # --- Models Imports ---
-from app.models.employer import Employer, EmployerType, SubscriptionTier 
+from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource
 from app.models.employee import Employee
 from app.models.subscriptions import Subscription
 from app.models.transaction import Transaction
@@ -33,6 +33,7 @@ from app.models.application import JobApplication, ApplicationStatus
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
+from app.services.kyc import KYCService
 
 # --- Utility Imports ---
 from app.utils.referral import generate_referral_code
@@ -52,7 +53,8 @@ from app.schemas.employer import (
     EmployerPersonalProfileResponse,
     EmployerCompanyProfileResponse,
     EmployerProfileUpdateRequest,
-    ReferralDashboardResponse
+    ReferralDashboardResponse,
+    KYCSubmitRequest
 )
 
 router = APIRouter()
@@ -369,6 +371,39 @@ async def update_employer_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_employer.phone
+    }
+
+# --- KYC SUBMISSION ---
+@router.post("/kyc/submit")
+async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_current_employer)):
+    employer = await Employer.get(current_user_id)
+    if not employer:
+        raise HTTPException(status_code=404, detail="Employer not found")
+
+    # Save the documents
+    employer.kyc_documents = data.model_dump()
+
+    # Trigger Automated Verification
+    is_verified, remarks = await KYCService.automated_verify(employer.kyc_documents)
+
+    if is_verified:
+        employer.kyc_status = KYCStatus.VERIFIED
+        employer.verified_by = VerificationSource.SYSTEM
+        employer.verified_at = datetime.now(timezone.utc)
+        employer.kyc_remarks = remarks
+        employer.is_verified = True 
+    else:
+        # Automated failed -> Send to Admin Queue
+        employer.kyc_status = KYCStatus.PENDING
+        employer.kyc_remarks = f"Auto-verify failed: {remarks}. Awaiting manual admin review."
+        employer.is_verified = False
+
+    await employer.save()
+    
+    return {
+        "status": "success", 
+        "kyc_status": employer.kyc_status,
+        "message": "KYC submitted. " + ("Verified automatically!" if is_verified else "Under admin review.")
     }
 
 # --- CORE RECRUITMENT FLOW (ATS) ---

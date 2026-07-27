@@ -57,26 +57,6 @@ class AvailabilityUpdate(BaseModel):
     """
     is_available: bool
 
-# --- Employee KYC Update Schema ---
-class EmployeeKYCUpdate(BaseModel):
-    """
-    Schema for updating sensitive KYC documents after registration.
-    """
-    aadhar_number: Optional[str] = Field(
-        default=None, 
-        min_length=12, 
-        max_length=12,
-        pattern=r"^\d{12}$", 
-        description="12-digit Aadhaar Number"
-    )
-    pan_number: Optional[str] = Field(
-        default=None, 
-        min_length=10, 
-        max_length=10,
-        pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$", 
-        description="Standard 10-character PAN format"
-    )
-
 # --- Registration & Response Schemas ---
 class EmployeeCreate(BaseModel):
     """

@@ -21,7 +21,6 @@ from app.schemas.employee import (
     EmployeeProfileUpdate,
     EmployeeResponse, 
     AvailabilityUpdate,
-    EmployeeKYCUpdate,
     EmployeeDashboardResponse,
     WorkExperienceInput,
     AppliedJobResponse,
@@ -45,7 +44,6 @@ from app.services.email import EmailService
 from app.services.webhooks import WebhookService 
 from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
-from app.services.kyc import KYCService
 from app.services.recommendation import RecommendationService
 from app.services.parser import ResumeParserService
 
@@ -364,72 +362,6 @@ async def update_employee_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_employee.phone
-    }
-
-# --- KYC Verification & Document Upload ---
-@router.post("/profile/verify_kyc")
-async def verify_employee_kyc(
-    id_type: str = Form(..., description="Must be 'AADHAAR' or 'PAN'"),
-    document_image: UploadFile = File(..., description="Photo of the ID card"),
-    current_employee: Employee = Depends(get_current_employee)
-):
-    """
-    Hybrid KYC Verification: Attempts OCR first. If it fails 3 times, routes to manual Admin review.
-    """
-    if current_employee.kyc_status == "VERIFIED" or getattr(current_employee, "is_approved", False):
-        return {"status": "success", "message": "Your account is already verified!"}
-        
-    if current_employee.kyc_status == "PENDING_REVIEW":
-        return {
-            "status": "pending", 
-            "message": "Your document is currently in the queue for manual review. Please check back later."
-        }
-
-    if document_image.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
-        raise HTTPException(status_code=400, detail="Only JPG and PNG images are supported.")
-
-    file_bytes = await document_image.read()
-    
-    try:
-        verification_result = await KYCService.verify_id_document(file_bytes, id_type)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, 
-            detail="KYC Provider is currently unavailable. Please try again later."
-        )
-
-    if verification_result["status"] != "VERIFIED":
-        current_employee.kyc_attempts += 1
-        
-        if current_employee.kyc_attempts >= 3:
-            current_employee.kyc_status = "PENDING_REVIEW"
-            await current_employee.save()
-            return {
-                "status": "manual_review",
-                "message": "Automated verification failed. We have sent your document to our team for a manual review within 24 hours."
-            }
-        else:
-            await current_employee.save()
-            attempts_left = 3 - current_employee.kyc_attempts
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Verification failed. Please ensure the image is clear and well-lit. You have {attempts_left} automated attempts remaining."
-            )
-
-    if id_type == "AADHAAR":
-        current_employee.adhar_card_number = verification_result["extracted_number"]
-    else:
-        current_employee.pan_card = verification_result["extracted_number"]
-        
-    current_employee.kyc_status = "VERIFIED"
-    current_employee.is_approved = True
-    
-    await current_employee.save()
-
-    return {
-        "status": "success",
-        "message": "Identity successfully verified! Your account is now active.",
-        "verified_name": verification_result["extracted_name"]
     }
 
 # --- Resume Upload & Parsing ---
