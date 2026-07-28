@@ -15,18 +15,13 @@ class Settings(BaseSettings):
 
     # --- Database Settings ---
     MONGODB_URL: str
-    DATABASE_NAME: str  # Required field from snippet 2
+    DATABASE_NAME: str  
 
     # --- SMS Gateway (2Factor) ---
     SMS_PROVIDER: str = "2factor"
     TWO_FACTOR_API_KEY: Optional[str] = None
     TWO_FACTOR_TEMPLATE_ID: Optional[str] = None
     TWO_FACTOR_SENDER_ID: Optional[str] = None
-
-    # --- Twilio Backup ---
-    TWILIO_SID: Optional[str] = None
-    TWILIO_AUTH_TOKEN: Optional[str] = None
-    TWILIO_PHONE_NUMBER: Optional[str] = None
 
     # --- Razorpay (Payments) ---
     RAZORPAY_KEY_ID: Optional[str] = None
@@ -40,8 +35,8 @@ class Settings(BaseSettings):
     AWS_S3_BUCKET_NAME: Optional[str] = None
 
     # --- External APIs ---
-    GOOGLE_MAPS_API_KEY: Optional[str] = None
-    GST_VERIFY_API_KEY: Optional[str] = None
+    OLA_MAPS_API_KEY: str 
+    REDIS_URL: str = "redis://localhost:6379/0"
 
     # --- Email (SMTP) ---
     SMTP_HOST: Optional[str] = None
@@ -56,7 +51,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"  # Permits extra fields in .env without crashing
+        extra="ignore"
     )
 
 settings = Settings()

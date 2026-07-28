@@ -1,0 +1,65 @@
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import WebSocket, WebSocketDisconnect
+
+# --- Dependency Imports ---
+from app.api.dependencies import get_current_admin
+
+# --- Model Imports ---
+from app.models.admin import Admin
+from app.models.notification import Notification
+
+# --- Service Imports ---
+from app.services.websocket import notifier
+
+router = APIRouter()
+
+@router.get("/")
+async def get_admin_notifications(current_admin: Admin = Depends(get_current_admin)):
+    """
+    Fetches notifications meant specifically for this admin, 
+    AND general system alerts meant for all admins (ADMIN_BROADCAST).
+    """
+    admin_id = str(current_admin.id)
+    
+    # Fetch notifications where user_id is EITHER their specific ID, OR the universal Admin ID
+    notifs = await Notification.find(
+        {"$or": [{"user_id": admin_id}, {"user_id": "ADMIN_BROADCAST"}]}
+    ).sort("-created_at").to_list()
+    
+    return {
+        "count": len(notifs), 
+        "notifications": notifs
+    }
+
+@router.delete("/{notif_id}")
+async def delete_admin_notification(notif_id: str, current_admin: Admin = Depends(get_current_admin)):
+    admin_id = str(current_admin.id)
+    
+    notif = await Notification.get(notif_id)
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification not found")
+        
+    # Ensure they can only delete admin notifications
+    if notif.user_id not in [admin_id, "ADMIN_BROADCAST"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this notification")
+
+    await notif.delete()
+    return {"status": "success", "message": "Admin notification deleted."}
+
+@router.websocket("/ws/{admin_id}")
+async def admin_websocket_notifications(websocket: WebSocket, admin_id: str):
+    """
+    Dedicated WebSocket endpoint for Admins.
+    Connect here: ws://yourdomain/admin/notifications/ws/{admin_id}
+    """
+    # 1. Connect using the specific admin method
+    await notifier.connect_admin(websocket, admin_id)
+    
+    try:
+        while True:
+            # 2. Keep the connection open
+            data = await websocket.receive_text()
+            
+    except WebSocketDisconnect:
+        # 3. Clean up the admin dictionary when they close the tab
+        notifier.disconnect_admin(admin_id)

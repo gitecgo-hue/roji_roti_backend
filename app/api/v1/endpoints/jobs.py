@@ -34,7 +34,6 @@ from app.services.notification import NotificationService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService 
 from app.services.webhooks import WebhookService
-from app.services.notification import NotificationService 
 
 # --- Import Utilities ---
 from app.utils.geocoding import get_coordinates_from_name 
@@ -46,7 +45,7 @@ router = APIRouter()
 class JobSearchQuery(BaseModel):
     lat: Optional[float] = None
     lon: Optional[float] = None
-    place_name: Optional[str] = None # Added for name-based search
+    place_name: Optional[str] = None
     radius_km: int = 10
     category: Optional[str] = None
 
@@ -55,15 +54,38 @@ class JobSearchQuery(BaseModel):
 # EMPLOYER: JOB MANAGEMENT
 # =====================================================================
 
+# --- BACKGROUND TASK ---
+async def match_and_notify_employees(job_id: str, job_category: str, job_city: str, job_title: str, is_pan_india: bool, company_name: str):
+    """
+    Runs in the background to find matching employees and send them a notification.
+    """
+    query = {"category": job_category}
+    
+    if not is_pan_india and job_city:
+        query["location_name"] = job_city
+        
+    matching_employees = await Employee.find(query).limit(100).to_list()
+    
+    for emp in matching_employees:
+        await NotificationService.notify_user(
+            user_id=str(emp.id),
+            title="New Job Match! 🎯",
+            message=f"{company_name} is looking for a {job_title} in your area.",
+            notif_type=NotificationType.NEW_JOB_MATCH,
+            related_entity_id=job_id
+        )
+
+# --- CREATE JOB ENDPOINT ---
 @router.post("/create", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
 async def create_job(
     job_data: JobCreateRequest,
+    background_tasks: BackgroundTasks,
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
     Creates a new job posting for the logged-in employer.
     """
-    # 1. Map the incoming Pydantic schema to the Beanie Database Model
+    # Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
         employer_id=str(current_employer.id),
         
@@ -97,58 +119,115 @@ async def create_job(
         is_urgent=job_data.is_urgent,
         status=job_data.status
     )
-    
+
+    # Save to database (Only called once!)
     await new_job.insert()
+
+    # Alert the Admins immediately
+    await NotificationService.notify_user(
+         user_id="ADMIN_BROADCAST",
+         title="New Job Posted",
+         message=f"Employer '{current_employer.company_name}' just posted a new role: {new_job.job_title}.",
+         notif_type=NotificationType.SYSTEM_ALERT,
+         related_entity_id=str(new_job.id)
+    )
+    
+    # Trigger the matchmaker in the background for employees
+    company_name = getattr(current_employer, "company_name", "A company")
+    background_tasks.add_task(
+        match_and_notify_employees,
+        job_id=str(new_job.id),
+        job_category=new_job.job_category,
+        job_city=new_job.job_city,
+        job_title=new_job.job_title,
+        is_pan_india=new_job.is_pan_india,
+        company_name=company_name
+    )
+
     return new_job
     
 # =====================================================================
-# EMPLOYEE: JOB DISCOVERY & SEARCH
+# PUBLIC/EMPLOYEE: JOB DISCOVERY & SEARCH
 # =====================================================================
 
+@router.get("/")
+async def get_all_jobs():
+    """Fetches all active jobs, ensuring the newest published job is always at the top."""
+    
+    jobs = await Job.find(
+        {"is_active": True}
+    ).sort("-created_at").to_list()
+    
+    return {
+        "count": len(jobs),
+        "jobs": jobs
+    }
+
 @router.get("/feed", response_model=dict)
-async def get_employee_home_feed(
+async def get_smart_job_recommendations(
     lat: Optional[float] = None, 
     lon: Optional[float] = None, 
-    radius_km: int = 25, 
+    radius_km: int = 5, # Defaults to 5km, frontend can change to 10km
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Dynamically loads jobs for the employee based on their trade category and GPS location.
+    Smart Feed: Dynamically loads jobs based on their exact trade category.
+    If GPS is provided, draws a literal circle around the user to find nearby jobs!
     """
     feed_items = {}
     
-    # 1. Fetch National Level Jobs First
+    # 1. Fetch National Level Jobs First (Remote/Pan-India for their trade)
     feed_items["national_jobs"] = await Job.find(
         Job.is_pan_india == True, 
         Job.is_active == True,
-        Job.category == current_employee.category 
+        Job.job_category == current_employee.category 
     ).limit(10).to_list()
 
-    # 2. If coordinates aren't provided, try to geocode the employee's home location_name
+    # 2. Fallback: If frontend didn't send GPS coords, try to geocode their typed city name
     if not lat or not lon:
         coords = await get_coordinates_from_name(current_employee.location_name)
         if coords:
             lon, lat = coords
 
-    # 3. Geospatial Local Job Query
+    # 3. Geospatial Local Job Query (The Smart Engine)
     if lat and lon:
         search_filter = {
             "is_active": True,
             "is_pan_india": False,
+            # Match their specific trade (e.g., "Electrician")
+            "job_category": current_employee.category, 
+            
+            # Draw the radius circle
             "current_location": {
                 "$near": {
-                    "$geometry": {"type": "Point", "coordinates": [lon, lat]},
-                    "$maxDistance": radius_km * 1000
+                    "$geometry": {
+                        "type": "Point", 
+                        "coordinates": [lon, lat] # [longitude, latitude]
+                    },
+                    # Convert kilometers to meters for MongoDB
+                    "$maxDistance": radius_km * 1000 
                 }
             }
         }
-        feed_items["local_jobs"] = await Job.find(search_filter).limit(20).to_list()
+        
+        # Fetch jobs sorted automatically by nearest distance!
+        nearby_jobs = await Job.find(search_filter).to_list()
+        
+        feed_items["radius_searched_km"] = radius_km
+        feed_items["matches_found"] = len(nearby_jobs)
+        feed_items["recommended_jobs"] = nearby_jobs
+
     else:
-        # Fallback to string matching if geocoding fails
-        feed_items["local_jobs"] = await Job.find(
-            Job.location_name == current_employee.location_name,
+        # 4. Ultimate Fallback: Text matching if both GPS and Geocoding completely fail
+        fallback_jobs = await Job.find(
+            Job.job_city == current_employee.location_name,
+            Job.job_category == current_employee.category,
             Job.is_active == True
         ).limit(20).to_list()
+
+        feed_items["radius_searched_km"] = "N/A (Text Match)"
+        feed_items["matches_found"] = len(fallback_jobs)
+        feed_items["recommended_jobs"] = fallback_jobs
 
     return feed_items
 

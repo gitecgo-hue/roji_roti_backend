@@ -3,8 +3,9 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime, timezone
 from enum import Enum
+import pymongo
 
-# ---ENUMS (Matches UI & System States) ---
+# --- ENUMS (Matches UI & System States) ---
 class JobStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
@@ -55,9 +56,10 @@ class CommunicationPreference(str, Enum):
     NO_WILL_CONTACT_FIRST = "No, I will contact candidates first"
 
 # --- HELPER SCHEMAS ---
-class LocationPoint(BaseModel):
+class GeoPoint(BaseModel):
+    """The exact format MongoDB needs for Maps (GeoJSON Point)"""
     type: str = "Point"
-    coordinates: List[float] # [longitude, latitude]
+    coordinates: List[float] # MUST be [longitude, latitude] in that order!
 
 # --- BEANIE DATABASE MODEL ---
 class Job(Document):
@@ -71,7 +73,9 @@ class Job(Document):
     work_location_type: WorkLocationType
     job_city: str
     locations: Optional[List[str]] = [] # Array of location strings
-    location_point: Optional[LocationPoint] = None # For geospatial searches
+    
+    # The Geospatial Field for radius searches
+    current_location: Optional[GeoPoint] = None 
     is_pan_india: bool = False
     
     # --- Salary & Pay ---
@@ -99,7 +103,7 @@ class Job(Document):
     is_active: bool = True
     status: JobStatus = JobStatus.DRAFT
     posted_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: Indexed(datetime) = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     # --- Analytics Counters ---
@@ -116,5 +120,6 @@ class Job(Document):
             "employer_id",
             "job_category",
             "status",
-            [("location_point.coordinates", "2dsphere")]
+            # The Geospatial Map Index for rapid 5km/10km radius searching
+            [("current_location", pymongo.GEOSPHERE)]
         ]

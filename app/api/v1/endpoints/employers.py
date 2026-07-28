@@ -400,6 +400,14 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
         employer.is_verified = False
 
     await employer.save()
+
+    await NotificationService.notify_user(
+    user_id="ADMIN_BROADCAST",
+    title="Action Required: New KYC Submission",
+    message=f"Employer '{employer.company_name}' has submitted their KYC documents for review.",
+    notif_type=NotificationType.KYC_SUBMITTED,
+    related_entity_id=str(employer.id)
+)
     
     return {
         "status": "success", 

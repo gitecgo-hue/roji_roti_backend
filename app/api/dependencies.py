@@ -3,9 +3,13 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from pydantic import ValidationError
 from bson import ObjectId
+import redis.asyncio as redis
 
 # --- Import Config ---
 from app.core.config import settings
+
+# --- Import Service ---
+from app.services.location import OlaMapsService
 
 # --- Import Models ---
 from app.models.employer import Employer
@@ -15,11 +19,21 @@ from app.models.auth import TokenBlacklist
 from app.core.security import ALGORITHM
 
 # --- OAuth2 Configuration ---
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/token")
 
-# --- Localization ---
+# --- OLA MAPS Configuration ---
+# Use settings to initialize Redis
+redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
+def get_location_service() -> OlaMapsService:
+    """Dependency to provide the Ola Maps Service with Redis attached."""
+    # Pass the API key directly from settings
+    return OlaMapsService(
+        api_key=settings.OLA_MAPS_API_KEY, 
+        redis_client=redis_client
+    )
+
+# --- Localization ---
 async def get_lang(accept_language: str = Header("en")):
     """
     Extracts language from headers for i18n support.

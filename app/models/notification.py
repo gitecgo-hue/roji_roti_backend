@@ -5,6 +5,12 @@ from enum import Enum
 from typing import Optional
 
 class NotificationType(str, Enum):
+    # --- Admin Alerts (NEW) ---
+    KYC_SUBMITTED = "kyc_submitted"
+    NEW_EMPLOYER = "new_employer"
+    SYSTEM_ERROR = "system_error"
+    FLAGGED_CONTENT = "flagged_content"
+    
     # --- Employer Alerts ---
     JOB_POSTED = "job_posted"
     NEW_APPLICANT = "new_applicant"
