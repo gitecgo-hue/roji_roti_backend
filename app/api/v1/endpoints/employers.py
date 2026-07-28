@@ -7,6 +7,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import uuid
+import math
 import re
 
 # --- Core Imports ---
@@ -86,7 +87,18 @@ class ApplicationStatusUpdate(BaseModel):
 
 class UpdatePhoneRequest(BaseModel):
     new_phone: str = Field(..., description="The new 10-digit mobile number")
-    otp_code: str = Field(..., description="The 6-digit OTP sent to the NEW number")
+    otp_code: str = Field(..., description="The 4-digit OTP sent to the NEW number")
+
+class EmployeeSearchFilter(BaseModel):
+    category: Optional[str] = None
+    skills: Optional[List[str]] = []
+    city: Optional[str] = None
+    max_distance_km: Optional[int] = 10
+    min_experience_years: Optional[int] = 0
+
+    # --- Pagination Variables ---
+    page: int = Field(default=1, ge=1, description="Page number (starts at 1)")
+    limit: int = Field(default=20, ge=1, le=100, description="Items per page (max 100)")
 
 # --- PROFILE COMPLETION & DASHBOARD ---
 @router.patch("/profile/complete", response_model=dict, status_code=status.HTTP_200_OK)
@@ -353,13 +365,14 @@ async def update_employer_phone(
 
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     
-    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+    # Compare the provided OTP with the one stored in the database
+    if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or expired OTP for the new phone number."
         )
 
-    otp_record.hashed_code = None
+    otp_record.code = None # Consume the OTP after successful verification
     await otp_record.save()
 
     current_employer.phone = clean_new_phone
@@ -532,30 +545,6 @@ async def update_application_status(
         "job_closed": job_closed
     }
 
-# --- DOWNLOAD RESUME ---
-@router.get("/download-resume/{employee_id}")
-async def download_employee_resume(
-    employee_id: str, 
-    current_employer: Employer = Depends(get_current_employer)
-):
-    await SubscriptionService.check_quota(str(current_employer.id), action_type="download_resume")
-    
-    employee = await Employee.get(PydanticObjectId(employee_id))
-    if not employee: 
-        raise HTTPException(status_code=404, detail="Employee not found")
-
-    pdf_buffer = ResumeService.generate_pdf(employee)
-    
-    await SubscriptionService.increment_usage(str(current_employer.id), action_type="download_resume")
-    
-    safe_name = getattr(employee, 'name', 'Employee').replace(" ", "_")
-    
-    return StreamingResponse(
-        pdf_buffer, 
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=Resume_{safe_name}.pdf"}
-    )
-
 # --- CONTACT UNLOCKS ---
 @router.post("/unlock-employee/{employee_id}")
 async def unlock_employee_contact(employee_id: str, current_employer: Employer = Depends(get_current_employer)):
@@ -570,73 +559,47 @@ async def unlock_employee_contact(employee_id: str, current_employer: Employer =
     return {"name": employee.name, "phone": employee.phone, "message": "Contact unlocked!"}
 
 # --- DISCOVERY, SEARCH & ACTIONS ---
-@router.post("/employee-search", response_model=List[dict])
-async def search_employees(
-    search_data: CandidateSearchRequest,
-    current_employer: Employer = Depends(get_current_employer)
-):
+@router.post("/employee-search")
+async def search_employees(filters: EmployeeSearchFilter):
     """
-    Advanced candidate search engine based on frontend filters.
+    Advanced Paginated Employee Search.
     """
-    query = {}
+    # Build the query
+    query = {"is_looking_for_job": True}
     
-    # Keyword Search (Matches against skills or job title)
-    if search_data.keywords:
-        # Using regex to make it case-insensitive
-        regex_pattern = re.compile(search_data.keywords, re.IGNORECASE)
-        query["$or"] = [
-            {"skills": {"$regex": regex_pattern}},
-            {"title": {"$regex": regex_pattern}}
-        ]
+    if filters.category:
+        query["category"] = filters.category
+    if filters.skills:
+        query["skills"] = {"$in": filters.skills} 
+    if filters.city:
+        query["location_name"] = filters.city
         
-    # City / Region Search
-    if search_data.city:
-        query["location_name"] = {"$regex": re.compile(search_data.city, re.IGNORECASE)}
-        
-    # Experience Range
-    if search_data.min_experience is not None or search_data.max_experience is not None:
-        query["total_experience"] = {}
-        if search_data.min_experience is not None:
-            query["total_experience"]["$gte"] = search_data.min_experience
-        if search_data.max_experience is not None:
-            query["total_experience"]["$lte"] = search_data.max_experience
-            
-    # Salary Range (Assuming your Employee model tracks expected salary)
-    if search_data.min_salary is not None or search_data.max_salary is not None:
-        query["expected_salary"] = {}
-        if search_data.min_salary is not None:
-            query["expected_salary"]["$gte"] = search_data.min_salary
-        if search_data.max_salary is not None:
-            query["expected_salary"]["$lte"] = search_data.max_salary
-            
-    # Education Levels
-    if search_data.education_levels and len(search_data.education_levels) > 0:
-        query["education"] = {"$in": search_data.education_levels}
-        
-    # Execute the query (limit to 50 results to prevent massive payloads)
-    results = await Employee.find(query).limit(50).to_list()
+    # 2. Count TOTAL matching documents first (before limiting)
+    # The frontend needs this to calculate how many pages exist
+    total_matches = await Employee.find(query).count()
     
-    return results
-
-# --- EMPLOYER-ONLY DISCOVERY ---
-@router.get("/employee-search", response_model=List[dict])
-async def search_employees(
-    category: Optional[str] = None,
-    location: Optional[str] = None,
-    min_experience: int = 0,
-    current_employer: Employer = Depends(get_current_employer)
-):
-    query = {"is_available": True}
-    if category: query["category"] = category
-    if location: query["location"] = {"$regex": location, "$options": "i"}
-    if min_experience > 0: query["experience_years"] = {"$gte": min_experience}
-
-    employees = await Employee.find(query).to_list()
-    return [{
-        "id": str(e.id), "name": e.name, "category": e.category, 
-        "location": e.location, "experience": getattr(e, "experience_years", 0),
-        "rate": getattr(e, "daily_rate", None), "rating": getattr(e, "rating", 0.0) 
-    } for e in employees]
+    # 3. Calculate how many documents to skip
+    # Example: Page 1 skips 0. Page 2 skips 20. Page 3 skips 40.
+    skip_count = (filters.page - 1) * filters.limit
+    
+    # 4. Fetch ONLY the requested chunk using .skip() and .limit()
+    matching_employees = await Employee.find(query).skip(skip_count).limit(filters.limit).to_list()
+    
+    # 5. Calculate total pages
+    total_pages = math.ceil(total_matches / filters.limit) if total_matches > 0 else 1
+    
+    # 6. Return standard paginated response
+    return {
+        "pagination": {
+            "current_page": filters.page,
+            "limit": filters.limit,
+            "total_matches": total_matches,
+            "total_pages": total_pages,
+            "has_next_page": filters.page < total_pages,
+            "has_prev_page": filters.page > 1
+        },
+        "results": matching_employees
+    }
 
 # --- Get Saved Searches ---
 @router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
@@ -717,15 +680,6 @@ async def rate_employee(
         "employee": employee.name,
         "new_rating": employee.rating
     }
-
-# --- NOTIFICATIONS ---
-@router.get("/notifications")
-async def get_employer_notification(current_employer: Employer = Depends(get_current_employer)):
-    notification = await Notification.find(
-        Notification.user_id == current_employer.id 
-    ).sort("-created_at").limit(20).to_list()
-    
-    return notification
 
 # --- UPDATE BILLING PROFILE (GSTIN) ---
 @router.put("/billing/profile")

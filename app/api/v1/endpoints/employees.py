@@ -1,9 +1,9 @@
 # --- IMPORTS ---
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from bson import ObjectId
 import random
 import re
@@ -13,10 +13,15 @@ from app.core.config import settings
 from app.core.security import create_access_token
 
 # --- Dependencies Imports ---
-from app.api.dependencies import get_current_employee, get_current_employer
+from app.api.dependencies import (
+    get_current_employee,
+    get_current_employer,
+    get_any_current_user,
+    get_current_user
+    )
 
 # --- Schema Imports ---
-from app.schemas.employee import (
+from app.schemas.employee import ( # There is a duplicate EmployeeProfileUpdate import
     EmployeeProfileUpdate,
     EmployeeProfileUpdate,
     EmployeeResponse, 
@@ -28,8 +33,8 @@ from app.schemas.employee import (
 )
 
 # --- Models Imports ---
-from app.models.employer import Employer
-from app.models.employee import Employee, GeoLocation
+from app.models.employer import Employer, EmployerType
+from app.models.employee import Employee, GeoLocation, Skill, WorkExperience
 from app.models.application import JobApplication, ApplicationStatus
 from app.models.contact import ContactUnlock 
 from app.models.job import Job 
@@ -127,12 +132,12 @@ async def complete_employee_profile(
             type="Point",
             coordinates=[data.location.longitude, data.location.latitude]
         )
-        current_employee.current_location = geo_location
-        # The ultimate model stores 'location' as an object, but if you have a string representation:
-        # current_employee.location = f"{data.location.latitude}, {data.location.longitude}"
+        # The field in the model is 'location', not 'current_location'
+        current_employee.location = geo_location
     
     if data.location_name:
-        current_employee.location_name = data.location_name
+        if current_employee.location:
+            current_employee.location.city = data.location_name
 
     if getattr(data, "preferred_locations", None):
         current_employee.preferred_locations = data.preferred_locations
@@ -153,34 +158,40 @@ async def complete_employee_profile(
     if getattr(data, "education_level", None):
         # Using the Education sub-model from the Ultimate Schema
         from app.models.employee import Education
-        current_employee.education = [Education(institution="Not Specified", degree=data.education_level)]
+        if not current_employee.education:
+            current_employee.education = []
+        current_employee.education.append(Education(institution="Not Specified", degree=data.education_level))
 
-    # Category / Header Details
+    # The Employee model does not have 'category' or 'trade_category' fields.
+    # This data should be stored in a different field, e.g., preferences.job_types.
     if getattr(data, "category", None):
-        current_employee.trade_category = data.category
-        current_employee.category = data.category
+        if not current_employee.preferences:
+            from app.models.employee import Preferences
+            current_employee.preferences = Preferences()
+        if data.category not in current_employee.preferences.job_types:
+            current_employee.preferences.job_types.insert(0, data.category)
+
     if getattr(data, "preferred_roles", None):
-        current_employee.preferred_roles = data.preferred_roles
-    if getattr(data, "experience", None) is not None:
-        current_employee.experience = data.experience
-        current_employee.experience_years = data.experience
+        if not current_employee.preferences:
+            from app.models.employee import Preferences
+            current_employee.preferences = Preferences()
+        for role in data.preferred_roles:
+            if role not in current_employee.preferences.job_types:
+                current_employee.preferences.job_types.append(role)
 
     # Skills Array (Model Conversion)
+    # The input `data.skills` is a list of strings, not objects.
     if getattr(data, "skills", None):
-        current_employee.skills = [
-            Skill(name=s.name, level=s.level, years=s.years) 
-            for s in data.skills
-        ]
+        current_employee.skills = [Skill(name=s) for s in data.skills]
 
     # Work Experience Array (Model Conversion)
+    # The input `WorkExperienceInput` is simpler than the `WorkExperience` model.
     if getattr(data, "work_experience", None):
         current_employee.work_experience = [
             WorkExperience(
-                company=exp.company,
-                title=exp.title,
-                start_date=exp.start_date,
-                end_date=exp.end_date,
-                description=exp.description
+                company=exp.company_name,
+                title=exp.job_title,
+                start_date=date.today() # Placeholder, as input schema is missing this
             ) for exp in data.work_experience
         ]
         
@@ -231,13 +242,22 @@ async def get_employee_dashboard(
         ContactUnlock.employee_id == current_employee.id
     ).count()
 
+    # Safely access nested properties that are part of the new model structure
+    category_display = (current_employee.preferences.job_types[0]
+                        if current_employee.preferences and current_employee.preferences.job_types
+                        else "Profile Incomplete")
+    
+    is_available = current_employee.availability.is_available if current_employee.availability else False
+    location_display = current_employee.location.city if current_employee.location and current_employee.location.city else "Location pending"
+    daily_rate = current_employee.salary_expectation.min if current_employee.salary_expectation else None
+
     return EmployeeDashboardResponse(
         name=current_employee.name or "User",
-        category=getattr(current_employee, "category", getattr(current_employee, "trade_category", "Profile Incomplete")),
-        is_available=getattr(current_employee, "availability_status", False),
+        category=category_display,
+        is_available=is_available,
         total_unlocks=unlock_count,
-        location=current_employee.location.get("name", "Location pending") if current_employee.location else "Location pending",
-        daily_rate=float(current_employee.expected_salary) if getattr(current_employee, "expected_salary", None) and current_employee.expected_salary.isdigit() else None,
+        location=location_display,
+        daily_rate=daily_rate,
         rating=getattr(current_employee, "rating", 0.0)
     )
 
@@ -347,13 +367,14 @@ async def update_employee_phone(
         )
 
     otp_record = await OTP.find_one({"phone": clean_new_phone})
-    if not otp_record or not otp_record.hashed_code or not verify_password(data.otp_code, otp_record.hashed_code):
+    # Compare the provided OTP with the one stored in the database
+    if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or expired OTP for the new phone number."
         )
 
-    otp_record.hashed_code = None
+    otp_record.code = None # Consume the OTP after successful verification
     await otp_record.save()
 
     current_employee.phone = clean_new_phone
@@ -440,26 +461,52 @@ async def upload_and_parse_resume(
 @router.get("/resume/download/{employee_id}")
 async def download_employee_resume(
     employee_id: str, 
-    current_employer = Depends(get_current_employer)
+    current_user = Depends(get_any_current_user)
 ):
     """
-    Downloads the employee's resume. 
+    Downloads an employee's resume.
+    - Employees can freely download their own resume.
+    - Employers use a 'download_resume' quota to download.
+    Generates a PDF dynamically if the employee hasn't uploaded a static file.
     """
-    await SubscriptionService.check_quota(str(current_employer.id), "download_resume")
     
+    # --- 1. AUTHORIZATION & QUOTA CHECKS ---
+    if current_user.role == "employee":
+        # Employees cannot snoop on other employees' resumes
+        if str(current_user.id) != employee_id:
+            raise HTTPException(
+                status_code=403, 
+                detail="You do not have permission to download this resume."
+            )
+            
+    elif current_user.role == "employer":
+        # Check subscription quota for employers before allowing download
+        await SubscriptionService.check_quota(str(current_user.id), "download_resume")
+        
+    else:
+        raise HTTPException(status_code=403, detail="Unauthorized role.")
+
+    # --- 2. FETCH THE EMPLOYEE ---
     employee = await Employee.get(ObjectId(employee_id))
     if not employee:
-        raise HTTPException(status_code=404, detail="Employee not found")
-    
-    if employee.resume_url:
-        return {"redirect_url": employee.resume_url}
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    # --- 3. RETURN OR GENERATE THE RESUME ---
+    # Scenario A: If a static resume is uploaded (e.g., S3/Cloudinary URL exists)
+    if getattr(employee, "resume_url", None):
+        # Redirecting directly to the URL is the cleanest way to handle external file links
+        return RedirectResponse(url=employee.resume_url)
         
+    # Scenario B: Generate the PDF on the fly if no static file exists
     pdf_content = await ResumeService.generate_pdf(employee)
+    
+    # Sanitize the filename to prevent header injection errors
+    safe_name = "".join([c for c in employee.name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
     
     return Response(
         content=pdf_content.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={employee.name}_Resume.pdf"}
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_Resume.pdf"'}
     )
 
 # --- Status & Visibility ---
@@ -479,20 +526,6 @@ async def update_availability_status(
         "message": f"Your status has been updated to {status_label}.",
         "availability_status": current_employee.availability_status
     }
-
-# --- Job Discovery ---
-@router.get("/jobs", status_code=status.HTTP_200_OK)
-async def get_job_feed():
-    """
-    The main feed for employees. 
-    Only returns jobs that are active.
-    """
-    active_jobs = await Job.find(Job.status == "published").to_list()
-    
-    if not active_jobs:
-        return {"message": "No active jobs found right now. Check back later!"}
-        
-    return active_jobs
 
 # --- Job Applications ---
 @router.post("/jobs/apply/{job_id}", status_code=status.HTTP_201_CREATED)
@@ -523,17 +556,16 @@ async def apply_for_job(
     new_app = JobApplication(
         job_id=job.id,
         employee_id=current_employee.id,
-        employer_id=job.employer_id, 
+        employer_id=PydanticObjectId(job.employer_id), 
         status=ApplicationStatus.APPLIED
     )
     
     # 2. SAVE THE APPLICATION TO THE DATABASE (This was missing!)
     await new_app.insert()
 
-    # 3. Send the notification to the employer
-    # Wrapping employer_id in str() ensures compatibility if job.employer_id is an ObjectId
+    # 3. Send the notification to the employer. The service expects a 'user_id' parameter.
     await NotificationService.notify_user(
-        employer_id=str(job.employer_id),
+        user_id=str(job.employer_id),
         title="New Application Received!",
         message=f"{current_employee.name} just applied for your {job.title} role.",
         notif_type=NotificationType.NEW_APPLICANT,
@@ -553,27 +585,30 @@ async def get_applied_jobs(
     """
     # Find all application documents belonging to the current employee
     applications = await JobApplication.find(
-        {"employee_id": str(current_employee.id)}
+        JobApplication.employee_id == current_employee.id
     ).to_list()
 
     if not applications:
         return []
 
     applied_jobs_data = []
-    
+
     # Loop through the applications to fetch the associated job details
     for app in applications:
         # Fetch the actual job document to get the title and company name
         job = await Job.get(app.job_id)
         
         if job:
+            # Fetch the employer to get the company name
+            employer = await Employer.get(job.employer_id)
+
             applied_jobs_data.append({
                 "application_id": str(app.id),
                 "job_id": str(job.id),
-                "job_title": getattr(job, "title", "Unknown Title"),
-                "company_name": getattr(job, "company_name", "Unknown Company"),
-                "status": getattr(app, "status", "pending"), 
-                "applied_at": getattr(app, "created_at", app.id.generation_time)
+                "job_title": getattr(job, "job_title", "Unknown Title"),
+                "company_name": getattr(employer, "company_name", "Unknown Company") if employer else "Unknown Company",
+                "status": getattr(app, "status", "pending"),
+                "applied_at": getattr(app, "applied_at", app.id.generation_time)
             })
 
     # Return the compiled list to the frontend
@@ -595,15 +630,25 @@ async def get_saved_jobs(
     # Loop through the saved IDs and fetch the actual job documents
     for job_id in current_employee.saved_job_ids:
         job = await Job.get(job_id)
-        
+
         # Only append it if the job still exists (hasn't been deleted by the employer)
         if job:
+            # Fetch employer to get company name
+            employer = await Employer.get(job.employer_id)
+
+            # Format salary into a readable string
+            salary_str = "Not specified"
+            if job.min_fixed_salary and job.max_fixed_salary:
+                salary_str = f"₹{job.min_fixed_salary} - ₹{job.max_fixed_salary}"
+            elif job.min_fixed_salary:
+                salary_str = f"From ₹{job.min_fixed_salary}"
+
             saved_jobs_data.append({
                 "job_id": str(job.id),
-                "job_title": getattr(job, "title", "Unknown Title"),
-                "company_name": getattr(job, "company_name", "Unknown Company"),
-                "location": getattr(job, "location", "Not specified"),
-                "expected_salary": getattr(job, "salary", None) # Adjust field name to match your Job model
+                "job_title": getattr(job, "job_title", "Unknown Title"),
+                "company_name": getattr(employer, "company_name", "Unknown Company") if employer else "Unknown Company",
+                "location": getattr(job, "job_city", "Not specified"),
+                "expected_salary": salary_str
             })
         else:
             # Optional: Clean up the database by removing IDs of jobs that no longer exist
@@ -650,44 +695,6 @@ async def unsave_job(
         
     return {"message": "Job was not in saved list", "saved": False}
 
-# --- Smart Recommendations ---
-@router.get("/jobs/recommendations")
-async def get_smart_job_recommendations(
-    radius_km: int = 15,
-    current_employee: Employee = Depends(get_current_employee)
-):
-    """
-    Returns an AI-ranked list of jobs based on Category, Distance, and Experience.
-    """
-    if not current_employee.current_location or not current_employee.current_location.coordinates:
-        return {"message": "Please update your location to see nearby job recommendations.", "jobs": []}
-
-    ranked_jobs_data = await RecommendationService.get_best_jobs_for_employee(
-        employee=current_employee, 
-        max_distance_km=radius_km
-    )
-
-    if not ranked_jobs_data:
-        return {"message": "No perfect matches found nearby. Try expanding your search radius!", "jobs": []}
-
-    formatted_jobs = []
-    for job in ranked_jobs_data:
-        formatted_jobs.append({
-            "job_id": str(job["_id"]),
-            "title": job.get("title", "Job Posting"),
-            "category": job.get("category"),
-            "location_name": job.get("location_name"),
-            "distance_km": round(job.get("distance_km", 0), 1),
-            "salary": job.get("salary_range", job.get("salary", "Not specified")),
-            "match_score": job.get("match_score")
-        })
-
-    return {
-        "status": "success",
-        "total_matches": len(formatted_jobs),
-        "jobs": formatted_jobs
-    }
-
 # --- Category of jobs ---
 
 @router.get("/categories", response_model=List[str])
@@ -697,65 +704,6 @@ async def get_all_categories():
     """
     categories = await Category.find(Category.is_active == True).to_list()
     return [c.name for c in categories]
-
-# --- Nearby Jobs & Geospatial Queries ---
-@router.get("/jobs/nearby_jobs")
-async def get_nearby_jobs(
-    radius_km: float = 5.0,
-    current_employee: Employee = Depends(get_current_employee)
-):
-    """
-    Uses MongoDB Geo-Spatial queries to find jobs within a specific radius.
-    """
-    lon, lat = current_employee.current_location.coordinates
-    radius_meters = radius_km * 1000
-
-    query = {
-        "current_location": {
-            "$near": {
-                "$geometry": {
-                    "type": "Point",
-                    "coordinates": [lon, lat]
-                },
-                "$maxDistance": radius_meters
-            }
-        },
-        "is_active": True,
-        "category": current_employee.category 
-    }
-
-    nearby_jobs = await Job.find(query).to_list()
-
-    return [{
-        "id": str(j.id),
-        "title": j.title,
-        "location_name": j.location_name,
-        "salary": j.salary_range,
-        "created_at": j.created_at
-    } for j in nearby_jobs]
-
-# --- Geocoding & Reverse Geocoding ---
-@router.get("/reverse_geocode")
-async def get_address_from_gps(lat: float, lng: float):
-    """
-    Takes GPS coordinates from the user's phone and returns a readable address.
-    """
-    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
-        raise HTTPException(status_code=400, detail="Invalid GPS coordinates provided.")
-
-    location_data = await MapService.reverse_geocode(lat, lng)
-    
-    if not location_data:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, 
-            detail="Could not resolve these coordinates to an address right now."
-        )
-
-    return {
-        "status": "success",
-        "formatted_address": location_data["formatted_address"],
-        "city": location_data["city"]
-    }
 
 # --- Reviews & Feedback ---
 @router.get("/{employee_id}/reviews", response_model=List[dict])

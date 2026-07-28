@@ -4,9 +4,11 @@ from jose import jwt, JWTError
 from pydantic import ValidationError
 from bson import ObjectId
 import redis.asyncio as redis
+import jwt
 
 # --- Import Config ---
 from app.core.config import settings
+from app.core.security import ALGORITHM
 
 # --- Import Service ---
 from app.services.location import OlaMapsService
@@ -16,10 +18,11 @@ from app.models.employer import Employer
 from app.models.employee import Employee
 from app.models.admin import Admin 
 from app.models.auth import TokenBlacklist  
-from app.core.security import ALGORITHM
 
 # --- OAuth2 Configuration ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/token")
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = "HS256"
 
 # --- OLA MAPS Configuration ---
 # Use settings to initialize Redis
@@ -32,13 +35,6 @@ def get_location_service() -> OlaMapsService:
         api_key=settings.OLA_MAPS_API_KEY, 
         redis_client=redis_client
     )
-
-# --- Localization ---
-async def get_lang(accept_language: str = Header("en")):
-    """
-    Extracts language from headers for i18n support.
-    """
-    return accept_language.split(",")[0].split("-")[0]
 
 # --- Authentication Core ---
 
@@ -61,7 +57,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         # ----------------------------------------------------
         
         user_id: str = payload.get("sub")
-        user_type: str = payload.get("user_type")
+        # Ensure compatibility whether the token uses 'role' or 'user_type'
+        user_type: str = payload.get("user_type") or payload.get("role")
         
         if user_id is None or user_type is None:
             raise HTTPException(
@@ -69,10 +66,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
                 detail="Invalid token payload: missing user ID or role"
             )
             
-    except (JWTError, ValidationError):
+    except (JWTError, ValidationError, jwt.PyJWTError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Could not validate credentials: token may be expired or tampered"
+            detail="Could not validate credentials: token may be expired or tampered",
+            headers={"WWW-Authenticate": "Bearer"}
         )
 
     return {"id": user_id, "user_type": user_type}
@@ -136,10 +134,10 @@ async def get_current_admin(user_info: dict = Depends(get_current_user)) -> Admi
         
     return admin_user
 
-async def get_any_current_user(user_info: dict = Depends(get_current_user)) -> str:
+async def get_any_current_user(user_info: dict = Depends(get_current_user)):
     """
     UNIVERSAL GUARD: Authenticates the user as either an Employer or an Employee.
-    Returns the user's ID string if successful.
+    Returns the user object with a dynamically attached '.role' property.
     """
     if not ObjectId.is_valid(user_info["id"]):
         raise HTTPException(
@@ -165,5 +163,8 @@ async def get_any_current_user(user_info: dict = Depends(get_current_user)) -> s
             detail="User account not found. Please log in again."
         )
 
-    # Return the clean string ID for your notification router to use
-    return str(user.id)
+    # Attach the role to the user object dynamically so we can check it later
+    # (Matches the logic expected by your resume download endpoint)
+    user.role = user_info["user_type"]
+    
+    return user

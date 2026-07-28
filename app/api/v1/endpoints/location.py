@@ -7,17 +7,6 @@ from app.services.location import OlaMapsService
 
 router = APIRouter()
 
-# --- Pydantic Schema for the Distance Matrix ---
-class DistanceMatrixRequest(BaseModel):
-    origins: List[Tuple[float, float]] = Field(
-        ..., 
-        description="List of [latitude, longitude] arrays. Example: [[19.076, 72.877]]"
-    )
-    destinations: List[Tuple[float, float]] = Field(
-        ..., 
-        description="List of [latitude, longitude] arrays. Example: [[18.520, 73.856]]"
-    )
-
 # =====================================================================
 # LOCATION & GEOCODING ENDPOINTS
 # =====================================================================
@@ -46,38 +35,3 @@ async def get_address(
 ):
     """Converts raw GPS coordinates back into a human-readable address."""
     return await loc_service.reverse_geocode(lat, lng)
-
-# =====================================================================
-# ROUTING & DISTANCE ENDPOINTS
-# =====================================================================
-
-@router.get("/directions")
-async def get_route_directions(
-    origin_lat: float = Query(...),
-    origin_lng: float = Query(...),
-    dest_lat: float = Query(...),
-    dest_lng: float = Query(...),
-    loc_service: OlaMapsService = Depends(get_location_service)
-):
-    """Calculates route, distance, and ETAs between a starting point and destination."""
-    return await loc_service.get_directions(
-        origin_lat=origin_lat, 
-        origin_lng=origin_lng, 
-        dest_lat=dest_lat, 
-        dest_lng=dest_lng
-    )
-
-@router.post("/distance-matrix")
-async def calculate_distance_matrix(
-    request: DistanceMatrixRequest,
-    loc_service: OlaMapsService = Depends(get_location_service)
-):
-    """
-    Calculates distance and travel times between multiple origins and destinations.
-    NOTE: This is a POST request in our API to handle complex JSON arrays easily, 
-    but the service calls Ola Maps using GET.
-    """
-    return await loc_service.get_distance_matrix(
-        origins=request.origins,
-        destinations=request.destinations
-    )
