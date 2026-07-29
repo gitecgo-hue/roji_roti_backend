@@ -180,7 +180,7 @@ async def get_smart_job_recommendations(
     feed_items["national_jobs"] = await Job.find(
         Job.is_pan_india == True, 
         Job.is_active == True,
-        Job.job_category == current_employee.category 
+        Job.job_category == current_employee.job_category 
     ).limit(10).to_list()
 
     # 2. Fallback: If frontend didn't send GPS coords, try to geocode their typed city name
@@ -195,7 +195,7 @@ async def get_smart_job_recommendations(
             "is_active": True,
             "is_pan_india": False,
             # Match their specific trade (e.g., "Electrician")
-            "job_category": current_employee.category, 
+            "job_category": current_employee.job_category, 
             
             # Draw the radius circle
             "current_location": {

@@ -104,6 +104,7 @@ class Employee(Document):
     saved_job_ids: List[str] = Field(default_factory=list)
     
     # --- Professional Details ---
+    job_category: Optional[str] = None
     skills: Optional[List[Skill]] = []
     work_experience: Optional[List[WorkExperience]] = []
     education: Optional[List[Education]] = []
