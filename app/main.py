@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # --- Rate Limiting Imports ---
@@ -70,3 +70,8 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # --- Routing ---
 app.include_router(api_router, prefix="/api/v1")
 api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Redirects the root URL to the Swagger documentation."""
+    return RedirectResponse(url="/docs")
