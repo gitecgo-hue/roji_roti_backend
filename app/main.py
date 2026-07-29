@@ -71,7 +71,61 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.include_router(api_router, prefix="/api/v1")
 api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])
 
-@app.get("/", include_in_schema=False)
-async def root_redirect():
-    """Redirects the root URL to the Swagger documentation."""
-    return RedirectResponse(url="/docs")
+from fastapi.responses import HTMLResponse
+
+# ... (rest of your file remains the same) ...
+
+@app.get("/", include_in_schema=False, response_class=HTMLResponse)
+async def root_screen():
+    """Welcome landing page for the API."""
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <title>{settings.PROJECT_NAME} API</title>
+            <style>
+                body {{
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background-color: #f8fafc;
+                    margin: 0;
+                }}
+                .card {{
+                    text-align: center;
+                    background: white;
+                    padding: 50px;
+                    border-radius: 12px;
+                    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+                    max-width: 500px;
+                }}
+                h1 {{ color: #1e293b; margin-bottom: 10px; }}
+                p {{ color: #64748b; margin-bottom: 30px; line-height: 1.5; }}
+                .btn {{
+                    display: inline-block;
+                    padding: 12px 24px;
+                    background-color: #10b981; /* A nice success green */
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 6px;
+                    font-weight: 600;
+                    transition: background-color 0.2s;
+                }}
+                .btn:hover {{ background-color: #059669; }}
+                .version {{ margin-top: 30px; font-size: 12px; color: #94a3b8; }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>Welcome to {settings.PROJECT_NAME}</h1>
+                <p>The backend services are running successfully. Click below to explore and test the endpoints.</p>
+                <a href="/docs" class="btn">View API Documentation</a>
+                <div class="version">Version: {settings.VERSION}</div>
+            </div>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
