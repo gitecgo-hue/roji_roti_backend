@@ -27,7 +27,11 @@ from app.schemas.job import (
 )
 
 # --- Import Dependencies ---
-from app.api.dependencies import get_current_employer, get_current_employee
+from app.api.dependencies import (
+    get_current_employer,
+    get_current_employee,
+    get_any_current_user
+    )
 
 # --- Import Services ---
 from app.services.notification import NotificationService
@@ -95,7 +99,7 @@ async def create_job(
         job_category=job_data.job_category,    
         work_location_type=job_data.work_location_type,
         job_city=job_data.job_city,            
-        locations=[job_data.job_city],         
+        locations=[job_data.job_city],   
         
         # --- Salary & Pay ---
         pay_type=job_data.pay_type,
@@ -249,6 +253,7 @@ async def get_smart_job_recommendations(
 async def search_jobs(query: JobSearchQuery):
     """
     Advanced job searching supporting both raw text (location_name) and Geospatial radiuses.
+    Strictly filters out any jobs that are not published and active.
     """
     lon, lat = query.lon, query.lat
 
@@ -261,7 +266,11 @@ async def search_jobs(query: JobSearchQuery):
     # 2. Execute the Search (Either Fallback or Geo-Search)
     if not (lon and lat):
         # Fallback: If no coordinates found, do a text search
-        fallback = {"is_active": True, "$or": [{"is_pan_india": True}]}
+        fallback = {
+            "is_active": True, 
+            "status": "published",
+            "$or": [{"is_pan_india": True}]
+        }
         if query.place_name:
             fallback["$or"].append({"location_name": query.place_name})
             fallback["$or"].append({"locations": query.place_name})
@@ -281,7 +290,8 @@ async def search_jobs(query: JobSearchQuery):
                     "$maxDistance": query.radius_km * 1000
                 }
             },
-            "is_active": True
+            "is_active": True,
+            "status": "published"
         }
         if query.category:
             geo_filter["category"] = query.category
@@ -315,11 +325,14 @@ async def search_jobs(query: JobSearchQuery):
 # =====================================================================
 # SINGLE JOB DETAIL VIEW
 # =====================================================================
-
 @router.get("/{job_id}", response_model=Job, status_code=status.HTTP_200_OK)
-async def get_single_job(job_id: str):
+async def get_single_job(
+    job_id: str,
+    current_user = Depends(get_any_current_user)
+):
     """
     Retrieves the complete details of a single job by its MongoDB ID.
+    Access is strictly gated based on whether the user is an employee or the job's employer.
     """
     # 1. Safely validate that the provided ID is a valid MongoDB ObjectId
     try:
@@ -333,22 +346,36 @@ async def get_single_job(job_id: str):
     # 2. Fetch the job from the database
     job = await Job.get(parsed_id)
 
-    # 3. Handle the case where the job doesn't exist
+    # 3. Handle the case where the job doesn't exist at all
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Job not found."
         )
 
-    # If you only want users to see active jobs, you can uncomment this:
-    if not job.is_active:
-        raise HTTPException(status_code=403, detail="This job is no longer active or has been closed.")
+    # 4. Gate access based on role and status
+    if current_user.role == "employee":
+        # Employees can ONLY see published/active jobs
+        # Returning a 404 instead of 403 prevents attackers from guessing if a draft exists
+        if job.status != "published" or not job.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="This job is no longer available."
+            )
+            
+    elif current_user.role == "employer":
+        # Employers can see drafts/expired jobs, but ONLY if they are the creator
+        if str(job.employer_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You do not have permission to view this job."
+            )
 
     return job
 
 # =====================================================================
 # EMPLOYER: UPDATE JOB POST
-# =====================================================================
+# ====================================================================+
 @router.put("/update_job/{job_id}")
 async def update_job_post(
     job_id: str,
@@ -358,9 +385,16 @@ async def update_job_post(
     """
     Updates an existing job post. 
     Only the employer who created the job is authorized to edit it.
+    Automatically manages visibility (is_active) based on the publication status.
     """
     # 1. Fetch the job from the database
-    job = await Job.get(job_id)
+    try:
+        job = await Job.get(PydanticObjectId(job_id))
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid Job ID format."
+        )
     
     # 2. Check if the job exists
     if not job:
@@ -370,7 +404,6 @@ async def update_job_post(
         )
         
     # 3. Security Check: Ensure the logged-in employer actually owns this job post
-    # (Assuming your Job model has an 'employer_id' field)
     if str(job.employer_id) != str(current_employer.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
@@ -383,11 +416,19 @@ async def update_job_post(
     if not update_dict:
         return {"message": "No changes provided.", "job_id": job_id}
         
-    # 5. Dynamically apply the updates to the Job document
+    # --- 5. THE FIX: Sync is_active when status changes ---
+    if "status" in update_dict:
+        # Automatically determine visibility based on the new status
+        is_published = update_dict["status"] == "published"
+        
+        # Inject the is_active change directly into our update dictionary
+        update_dict["is_active"] = is_published
+        
+    # 6. Dynamically apply the updates to the Job document
     for field, value in update_dict.items():
         setattr(job, field, value)
         
-    # 6. Save the updated document back to MongoDB
+    # 7. Save the updated document back to MongoDB
     await job.save()
     
     return {

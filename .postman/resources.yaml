@@ -1,0 +1,13 @@
+# Use this workspace to collaborate
+workspace:
+  id: 47555907-1269-413f-89dd-73f4b248b986
+
+localResources:
+  documents:
+    - ../README.md
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/Roji Roti: 923fe545-a484-4531-a550-7262d03df095

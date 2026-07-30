@@ -72,7 +72,7 @@ class Job(Document):
     job_category: Indexed(str)
     work_location_type: WorkLocationType
     job_city: str
-    locations: Optional[List[str]] = [] # Array of location strings
+    locations: Optional[List[str]] = []
     
     # The Geospatial Field for radius searches
     current_location: Optional[GeoPoint] = None 

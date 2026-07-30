@@ -25,7 +25,7 @@ from app.models.notification import Notification, NotificationType
 from app.models.contact import ContactUnlock
 from app.models.payment import Payment
 from app.models.review import Review 
-from app.models.job import Job  
+from app.models.job import Job
 from app.models.auth import OTP
 from app.models.saved_search import SavedSearch
 from app.models.application import JobApplication, ApplicationStatus
@@ -42,6 +42,7 @@ from app.utils.referral import generate_referral_code
 from app.utils.maps import MapService
 
 # --- Schema Imports ---
+from app.schemas.job import JobResponse
 from app.schemas.search import CandidateSearchRequest
 from app.schemas.search import SavedSearchCreate, SavedSearchResponse
 from app.schemas.billing import (
@@ -428,6 +429,29 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
         "message": "KYC submitted. " + ("Verified automatically!" if is_verified else "Under admin review.")
     }
 
+# --- My Posted Job List ---
+@router.get("/my_jobs", response_model=List[JobResponse])
+async def get_my_jobs(
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Retrieves a list of all job posts created by the currently logged-in employer.
+    This includes published jobs, drafts, and expired jobs so the employer can manage them.
+    """
+    employer_id_str = str(current_employer.id)
+    
+    # Query the database for jobs matching this specific employer
+    # We use $or to safely catch the ID whether it was saved as a string or an ObjectId
+    my_jobs = await Job.find({
+        "$or": [
+            {"employer_id": employer_id_str},
+            {"employer_id": ObjectId(employer_id_str)}
+        ]
+    }).sort("-created_at").to_list() # Sorts so the newest jobs appear at the top
+
+    # Return the list (FastAPI will automatically format it to your JobResponse schema)
+    return my_jobs
+
 # --- CORE RECRUITMENT FLOW (ATS) ---
 @router.get("/jobs/{job_id}/applicants", response_model=List[dict])
 async def list_job_applicants(
@@ -570,21 +594,21 @@ async def search_employees(filters: EmployeeSearchFilter):
     if filters.city:
         query["location_name"] = filters.city
         
-    # 2. Count TOTAL matching documents first (before limiting)
+    # Count TOTAL matching documents first (before limiting)
     # The frontend needs this to calculate how many pages exist
     total_matches = await Employee.find(query).count()
     
-    # 3. Calculate how many documents to skip
+    # Calculate how many documents to skip
     # Example: Page 1 skips 0. Page 2 skips 20. Page 3 skips 40.
     skip_count = (filters.page - 1) * filters.limit
     
-    # 4. Fetch ONLY the requested chunk using .skip() and .limit()
+    # Fetch ONLY the requested chunk using .skip() and .limit()
     matching_employees = await Employee.find(query).skip(skip_count).limit(filters.limit).to_list()
     
-    # 5. Calculate total pages
+    # Calculate total pages
     total_pages = math.ceil(total_matches / filters.limit) if total_matches > 0 else 1
     
-    # 6. Return standard paginated response
+    # Return standard paginated response
     return {
         "pagination": {
             "current_page": filters.page,
