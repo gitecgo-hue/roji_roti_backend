@@ -1,6 +1,6 @@
 # Use this workspace to collaborate
 workspace:
-  id: 47555907-1269-413f-89dd-73f4b248b986
+  id: ""
 
 localResources:
   documents:
@@ -10,4 +10,4 @@ localResources:
 
 cloudResources:
   collections:
-    ../postman/collections/Roji Roti: 923fe545-a484-4531-a550-7262d03df095
+    ../postman/collections/Roji Roti: 7bcc3cf9-7907-4a50-9982-d0e1104738e0

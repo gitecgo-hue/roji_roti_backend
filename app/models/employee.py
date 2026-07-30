@@ -1,5 +1,5 @@
 from beanie import Document, Indexed, PydanticObjectId
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, date
 from enum import Enum
@@ -89,15 +89,19 @@ class Employee(Document):
     phone_verified: bool = False
     
     # --- Names & Bio ---
+    title: Optional[str] = None
     name: Optional[str] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     display_name: Optional[str] = None
     summary: Optional[str] = None
     email: Optional[EmailStr] = None
+    email_verified: bool = False
+    total_experience: Optional[float] = None
     avatar: Optional[str] = None
     
     # --- Location Data ---
+    location_name: Optional[str] = None
     location: Optional[GeoLocation] = None
 
     # --- Saved Jobs & Applications ---
@@ -132,7 +136,6 @@ class Employee(Document):
         indexes = [
             "role",
             "status",
-            [("location.coordinates", "2dsphere")] 
         ]
 
 # =====================================================================

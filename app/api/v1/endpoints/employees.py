@@ -1,7 +1,7 @@
 # --- IMPORTS ---
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response
 from fastapi.responses import StreamingResponse, RedirectResponse
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
 from typing import List, Optional
 from datetime import datetime, date
 from bson import ObjectId
@@ -34,7 +34,15 @@ from app.schemas.employee import ( # There is a duplicate EmployeeProfileUpdate 
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType
-from app.models.employee import Employee, GeoLocation, Skill, WorkExperience
+from app.models.employee import (
+    Employee,
+    GeoLocation,
+    Skill,
+    WorkExperience,
+    Education,
+    SalaryExpectation,
+    ProfileDocument
+    )
 from app.models.application import JobApplication, ApplicationStatus
 from app.models.contact import ContactUnlock 
 from app.models.job import Job 
@@ -315,19 +323,51 @@ async def update_employee_profile(
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Updates the candidate's personal and professional details in a single request.
+    Updates the candidate's personal and professional details safely by 
+    mapping flat frontend fields to rich database objects.
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # Check if the email is being changed to reset verification status
+    # 1. Handle Email Changes
     if "email" in update_dict and update_dict["email"] != getattr(current_employee, "email", None):
+        current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
+
+    # 2. Map Direct/Simple Fields
+    direct_fields = ["name", "title", "location_name", "total_experience"]
+    for field in direct_fields:
+        if field in update_dict:
+            setattr(current_employee, field, update_dict[field])
+
+    # 3. Map Complex Fields (THE CRASH FIX)
+    # Convert flat list of strings into List of Skill objects
+    if "skills" in update_dict:
+        current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
+
+    # Convert single float into a SalaryExpectation object
+    if "expected_salary" in update_dict:
+        current_employee.salary_expectation = SalaryExpectation(
+            min=update_dict["expected_salary"],
+            max=update_dict["expected_salary"]
+        )
+
+    # Convert a single string into a proper Education object inside a list
+    if "education" in update_dict:
+        current_employee.education = [Education(institution=update_dict["education"])]
+
+    # Convert a resume string URL into a ProfileDocument object inside a list
+    if "resume_url" in update_dict:
+        current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
         
-    # Dynamically apply all provided fields to the database model
-    for field, value in update_dict.items():
-        setattr(current_employee, field, value)
-        
-    await current_employee.save()
+    # 4. Safely save the mapped data
+    try:
+        await current_employee.save()
+    except ValidationError as e:
+        # If anything sneaks through, catch it politely without crashing the server!
+        raise HTTPException(
+            status_code=422, 
+            detail=f"Data format error: {e.errors()}"
+        )
     
     return {
         "message": "Profile updated successfully",

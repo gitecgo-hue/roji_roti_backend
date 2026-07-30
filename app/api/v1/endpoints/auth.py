@@ -291,6 +291,34 @@ async def logout(token: str = Depends(oauth2_scheme)):
 
     return {"status": "success", "message": "Successfully logged out."}
 
+# --- fix DB Error ---
+@router.get("/fix-corrupted-db")
+async def fix_corrupted_employees():
+    """
+    A temporary endpoint to fix corrupted database records where 
+    'education' or 'work_experience' were accidentally saved as strings.
+    """
+    # 1. Access the raw MongoDB collection directly, bypassing Pydantic
+    collection = Employee.get_motor_collection()
+    
+    # 2. Find any user where 'education' is a string and reset it to an empty array
+    edu_fix = await collection.update_many(
+        {"education": {"$type": "string"}}, 
+        {"$set": {"education": []}}
+    )
+    
+    # 3. Let's fix 'work_experience' too, just in case Swagger UI messed that up as well!
+    work_fix = await collection.update_many(
+        {"work_experience": {"$type": "string"}}, 
+        {"$set": {"work_experience": []}}
+    )
+
+    return {
+        "message": "Database cleaned successfully!",
+        "corrupted_education_records_fixed": edu_fix.modified_count,
+        "corrupted_work_records_fixed": work_fix.modified_count
+    }
+
 # --- DELIVERY WEBHOOK ---
 @router.get("/webhooks/2factor", include_in_schema=False)
 @router.post("/webhooks/2factor", include_in_schema=False)

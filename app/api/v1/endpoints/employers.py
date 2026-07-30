@@ -309,13 +309,15 @@ async def update_employer_profile(
 ):
     """
     Updates both the individual recruiter/owner's personal details 
-    and the business/company details in a single request.
+    and the business/company details safely.
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # Check for email duplication (excluding current user)
-    if "email" in update_dict and update_dict["email"]:
-        existing_employer = await Employer.find_one({"email": update_dict["email"], "_id": {"$ne": current_employer.id}})
+    # 1. Check for email duplication (excluding current user)
+    if update_dict.get("email"):
+        existing_employer = await Employer.find_one(
+            {"email": update_dict["email"], "_id": {"$ne": current_employer.id}}
+        )
         if existing_employer:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -325,18 +327,35 @@ async def update_employer_profile(
         # If they change their email, we must mark it as unverified again
         if update_dict["email"] != current_employer.email:
             current_employer.email_verified = False
-        
-    # Apply changes dynamically (handles both personal and company fields seamlessly)
+            
+    # 2. Apply changes dynamically and SAFELY
     for field, value in update_dict.items():
-        setattr(current_employer, field, value)
-        
-    await current_employer.save()
+        # Handle email separately since we validated it above
+        if field == "email":
+            current_employer.email = value
+            continue
+            
+        # THE FIX: Only update fields that actually exist in the database model
+        if hasattr(current_employer, field):
+            setattr(current_employer, field, value)
+        else:
+            print(f"DEBUG: Ignored unknown field '{field}' from frontend payload.")
+            
+    # 3. Gracefully catch Pydantic validation errors (The Swagger UI "string" fix)
+    try:
+        await current_employer.save()
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=422, 
+            detail=f"Data format error. Please check your payload: {e.errors()}"
+        )
     
+    # 4. Safely return values using getattr to prevent missing field crashes
     return {
         "message": "Profile updated successfully",
-        "name": current_employer.name,
-        "company_name": current_employer.company_name,
-        "email": current_employer.email,
+        "name": getattr(current_employer, "name", None),
+        "company_name": getattr(current_employer, "company_name", None),
+        "email": getattr(current_employer, "email", None),
         "email_verified": getattr(current_employer, "email_verified", False),
         "gstin": getattr(current_employer, "gstin", None)
     }
