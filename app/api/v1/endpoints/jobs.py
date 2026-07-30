@@ -84,6 +84,7 @@ async def create_job(
 ):
     """
     Creates a new job posting for the logged-in employer.
+    The job is only visible in feeds and triggers notifications if the status is "published".
     """
     # Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
@@ -117,32 +118,41 @@ async def create_job(
         is_pan_india=job_data.is_pan_india,
         job_type=job_data.job_type,
         is_urgent=job_data.is_urgent,
-        status=job_data.status
+        
+        # --- Visibility Control ---
+        status=job_data.status,
+        
+        # Automatically hide from the Smart Feed unless published
+        # (Assuming your feed filters using Job.is_active == True)
+        is_active=True if job_data.status == "published" else False
     )
 
     # Save to database (Only called once!)
     await new_job.insert()
 
-    # Alert the Admins immediately
-    await NotificationService.notify_user(
-         user_id="ADMIN_BROADCAST",
-         title="New Job Posted",
-         message=f"Employer '{current_employer.company_name}' just posted a new role: {new_job.job_title}.",
-         notif_type=NotificationType.SYSTEM_ALERT,
-         related_entity_id=str(new_job.id)
-    )
-    
-    # Trigger the matchmaker in the background for employees
-    company_name = getattr(current_employer, "company_name", "A company")
-    background_tasks.add_task(
-        match_and_notify_employees,
-        job_id=str(new_job.id),
-        job_category=new_job.job_category,
-        job_city=new_job.job_city,
-        job_title=new_job.job_title,
-        is_pan_india=new_job.is_pan_india,
-        company_name=company_name
-    )
+    # --- ONLY Trigger Alerts if the Job is actually PUBLISHED ---
+    if new_job.status == "published":
+        
+        # Alert the Admins immediately
+        await NotificationService.notify_user(
+             user_id="ADMIN_BROADCAST",
+             title="New Job Posted",
+             message=f"Employer '{current_employer.company_name}' just posted a new role: {new_job.job_title}.",
+             notif_type=NotificationType.SYSTEM_ALERT,
+             related_entity_id=str(new_job.id)
+        )
+        
+        # Trigger the matchmaker in the background for employees
+        company_name = getattr(current_employer, "company_name", "A company")
+        background_tasks.add_task(
+            match_and_notify_employees,
+            job_id=str(new_job.id),
+            job_category=new_job.job_category,
+            job_city=new_job.job_city,
+            job_title=new_job.job_title,
+            is_pan_india=new_job.is_pan_india,
+            company_name=company_name
+        )
 
     return new_job
     

@@ -429,13 +429,6 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
     }
 
 # --- CORE RECRUITMENT FLOW (ATS) ---
-@router.get("/my-jobs", response_model=List[Job]) 
-async def list_employer_jobs(current_employer: Employer = Depends(get_current_employer)):
-    """Sees every job the employer has ever posted."""
-    jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
-    return jobs
-
-# --- JOB APPLICANTS & APPLICATION MANAGEMENT ---
 @router.get("/jobs/{job_id}/applicants", response_model=List[dict])
 async def list_job_applicants(
     job_id: str, 
@@ -445,7 +438,7 @@ async def list_job_applicants(
         job = await Job.get(PydanticObjectId(job_id))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Job ID format")
-        
+                
     if not job or str(job.employer_id) != str(current_employer.id):
         raise HTTPException(status_code=403, detail="Unauthorized or job not found.")
 
@@ -464,7 +457,10 @@ async def list_job_applicants(
             "application_id": str(app.id),
             "employee_id": str(app.employee_id),
             "employee_name": employee.name if employee else "Deleted Employee",
-            "employee_category": employee.category if employee else "N/A",
+            
+            # --- FIXED CRASH SAFEGUARD ---
+            "employee_category": getattr(employee, "job_category", "N/A") if employee else "N/A",
+            
             "employee_phone": employee.phone if employee else "N/A", 
             "status": getattr(app, "status", "applied"),
             "applied_at": getattr(app, "applied_at", datetime.utcnow())
