@@ -326,13 +326,10 @@ async def search_jobs(query: JobSearchQuery):
 # SINGLE JOB DETAIL VIEW
 # =====================================================================
 @router.get("/{job_id}", response_model=Job, status_code=status.HTTP_200_OK)
-async def get_single_job(
-    job_id: str,
-    current_user = Depends(get_any_current_user)
-):
+async def get_single_job(job_id: str):
     """
-    Retrieves the complete details of a single job by its MongoDB ID.
-    Access is strictly gated based on whether the user is an employee or the job's employer.
+    Retrieves the complete details of a single job globally by its MongoDB ID.
+    No authorization is required.
     """
     # 1. Safely validate that the provided ID is a valid MongoDB ObjectId
     try:
@@ -353,23 +350,12 @@ async def get_single_job(
             detail="Job not found."
         )
 
-    # 4. Gate access based on role and status
-    if current_user.role == "employee":
-        # Employees can ONLY see published/active jobs
-        # Returning a 404 instead of 403 prevents attackers from guessing if a draft exists
-        if job.status != "published" or not job.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="This job is no longer available."
-            )
-            
-    elif current_user.role == "employer":
-        # Employers can see drafts/expired jobs, but ONLY if they are the creator
-        if str(job.employer_id) != str(current_user.id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="You do not have permission to view this job."
-            )
+    # 4. Prevent public access to private drafts or closed jobs
+    if job.status != "published" or not job.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="This job is no longer available."
+        )
 
     return job
 
