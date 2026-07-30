@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
 from typing import List, Optional
 from datetime import datetime, date
 from bson import ObjectId
+from beanie import PydanticObjectId
 import random
 import re
 
@@ -329,7 +330,7 @@ async def update_employee_profile(
     update_dict = profile_data.model_dump(exclude_unset=True)
     
     # 1. Handle Email Changes
-    if "email" in update_dict and update_dict["email"] != getattr(current_employee, "email", None):
+    if update_dict.get("email") and update_dict["email"] != getattr(current_employee, "email", None):
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
@@ -339,34 +340,33 @@ async def update_employee_profile(
         if field in update_dict:
             setattr(current_employee, field, update_dict[field])
 
-    # 3. Map Complex Fields (THE CRASH FIX)
-    # Convert flat list of strings into List of Skill objects
-    if "skills" in update_dict:
-        current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
-
-    # Convert single float into a SalaryExpectation object
-    if "expected_salary" in update_dict:
-        current_employee.salary_expectation = SalaryExpectation(
-            min=update_dict["expected_salary"],
-            max=update_dict["expected_salary"]
-        )
-
-    # Convert a single string into a proper Education object inside a list
-    if "education" in update_dict:
-        current_employee.education = [Education(institution=update_dict["education"])]
-
-    # Convert a resume string URL into a ProfileDocument object inside a list
-    if "resume_url" in update_dict:
-        current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
-        
-    # 4. Safely save the mapped data
+    # --- EXPANDED SAFETY NET: Put object creation inside the try block ---
     try:
+        # 3. Map Complex Fields 
+        if update_dict.get("skills"):
+            current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
+
+        if update_dict.get("expected_salary"):
+            current_employee.salary_expectation = SalaryExpectation(
+                min=update_dict["expected_salary"],
+                max=update_dict["expected_salary"]
+            )
+
+        if update_dict.get("education"):
+            current_employee.education = [Education(institution=update_dict["education"])]
+
+        # If Swagger sends "string" here, the HttpUrl validation will safely trigger the except block!
+        if update_dict.get("resume_url"):
+            current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
+            
+        # 4. Safely save the mapped data
         await current_employee.save()
+        
     except ValidationError as e:
-        # If anything sneaks through, catch it politely without crashing the server!
+        # Now catches errors during BOTH object creation and database saving!
         raise HTTPException(
             status_code=422, 
-            detail=f"Data format error: {e.errors()}"
+            detail=f"Data format error. Please check your inputs (like ensuring URLs are actually URLs): {e.errors()}"
         )
     
     return {
@@ -607,7 +607,7 @@ async def apply_for_job(
     await NotificationService.notify_user(
         user_id=str(job.employer_id),
         title="New Application Received!",
-        message=f"{current_employee.name} just applied for your {job.title} role.",
+        message=f"{current_employee.name} just applied for your {getattr(job, 'job_title', 'Job')} role.", 
         notif_type=NotificationType.NEW_APPLICANT,
         related_entity_id=str(job.id)
     )
