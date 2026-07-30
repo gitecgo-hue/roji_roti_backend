@@ -534,14 +534,14 @@ async def download_employee_resume(
     # --- 3. RETURN OR GENERATE THE RESUME ---
     # Scenario A: If a static resume is uploaded (e.g., S3/Cloudinary URL exists)
     if getattr(employee, "resume_url", None):
-        # Redirecting directly to the URL is the cleanest way to handle external file links
         return RedirectResponse(url=employee.resume_url)
         
-    # Scenario B: Generate the PDF on the fly if no static file exists
-    pdf_content = await ResumeService.generate_pdf(employee)
+    # Scenario B: Generate the PDF synchronously on the fly (NO 'await' keyword)
+    pdf_content = ResumeService.generate_pdf(employee)
     
     # Sanitize the filename to prevent header injection errors
-    safe_name = "".join([c for c in employee.name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+    employee_name = getattr(employee, "name", "Candidate") or "Candidate"
+    safe_name = "".join([c for c in employee_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
     
     return Response(
         content=pdf_content.getvalue(),

@@ -1,7 +1,7 @@
 # --- IMPORTS ---
 from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ValidationError
 from beanie import PydanticObjectId
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
@@ -14,11 +14,11 @@ import re
 from app.core.config import settings
 
 # --- Dependencies Imports ---
-from app.api.dependencies import get_current_employer
+from app.api.dependencies import get_current_employer, get_current_employee
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource
-from app.models.employee import Employee
+from app.models.employee import Employee, Skill, Education, SalaryExpectation, ProfileDocument
 from app.models.subscriptions import Subscription
 from app.models.transaction import Transaction
 from app.models.notification import Notification, NotificationType
@@ -50,6 +50,7 @@ from app.schemas.billing import (
     PaymentResponse,
     BillingProfileUpdateRequest
 )
+from app.schemas.employee import EmployeeProfileUpdate
 from app.schemas.employer import (
     EmployerDashboardResponse,
     EmployerCompleteProfileRequest,
@@ -290,7 +291,6 @@ async def upload_company_logo(
     
     # --- MOCK UPLOAD (For demonstration purposes) ---
     uploaded_url = f"https://your-cloud-storage.com/uploads/logos/{unique_filename}"
-    # ---------------------------------------------------------
 
     # Update the employer's profile in the database
     current_employer.logo_url = uploaded_url
@@ -302,64 +302,83 @@ async def upload_company_logo(
     }
 
 # --- UPDATE PERSONAL & COMPANY PROFILE ---
-@router.put("/profile_update")
-async def update_employer_profile(
-    profile_data: EmployerProfileUpdateRequest,
-    current_employer: Employer = Depends(get_current_employer)
+# --- PROFILE UPDATE ---
+@router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
+async def update_employee_profile(
+    profile_data: EmployeeProfileUpdate,
+    current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Updates both the individual recruiter/owner's personal details 
-    and the business/company details safely.
+    Updates the candidate's personal and professional details safely by 
+    mapping flat frontend fields to rich database objects.
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # 1. Check for email duplication (excluding current user)
+    # 1. Check for email duplication (excluding current user) & Handle Verification
     if update_dict.get("email"):
-        existing_employer = await Employer.find_one(
-            {"email": update_dict["email"], "_id": {"$ne": current_employer.id}}
+        existing_employee = await Employee.find_one(
+            {"email": update_dict["email"], "_id": {"$ne": current_employee.id}}
         )
-        if existing_employer:
+        if existing_employee:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="An account with this email already exists."
             )
             
-        # If they change their email, we must mark it as unverified again
-        if update_dict["email"] != current_employer.email:
-            current_employer.email_verified = False
-            
-    # 2. Apply changes dynamically and SAFELY
-    for field, value in update_dict.items():
-        # Handle email separately since we validated it above
-        if field == "email":
-            current_employer.email = value
-            continue
-            
-        # THE FIX: Only update fields that actually exist in the database model
-        if hasattr(current_employer, field):
-            setattr(current_employer, field, value)
-        else:
-            print(f"DEBUG: Ignored unknown field '{field}' from frontend payload.")
-            
-    # 3. Gracefully catch Pydantic validation errors (The Swagger UI "string" fix)
+        if update_dict["email"] != getattr(current_employee, "email", None):
+            current_employee.email = update_dict["email"]
+            current_employee.email_verified = False
+
+    # 2. Map Direct/Simple Fields Safely
+    direct_fields = ["name", "title", "location_name", "total_experience"]
+    for field in direct_fields:
+        if field in update_dict:
+            setattr(current_employee, field, update_dict[field])
+
+    # 3. Map Complex Fields (With Null/Empty Checks & Safety Net)
     try:
-        await current_employer.save()
+        # Convert flat list of strings into List of Skill objects
+        if update_dict.get("skills"):
+            current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
+
+        # Convert single float into a SalaryExpectation object
+        if update_dict.get("expected_salary"):
+            current_employee.salary_expectation = SalaryExpectation(
+                min=update_dict["expected_salary"],
+                max=update_dict["expected_salary"]
+            )
+
+        # Convert a single string into a proper Education object inside a list
+        if update_dict.get("education"):
+            current_employee.education = [Education(institution=update_dict["education"])]
+
+        # Convert a resume string URL into a ProfileDocument object inside a list
+        if update_dict.get("resume_url"):
+            current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
+            
+        # 4. Safely save the mapped data to MongoDB
+        await current_employee.save()
+        
     except ValidationError as e:
+        # Catches formatting errors (like invalid URLs or bad types) and returns a clean 422
         raise HTTPException(
             status_code=422, 
-            detail=f"Data format error. Please check your payload: {e.errors()}"
+            detail=f"Data format error. Please check your inputs: {e.errors()}"
         )
     
-    # 4. Safely return values using getattr to prevent missing field crashes
+    # 5. Return success payload
     return {
         "message": "Profile updated successfully",
-        "name": getattr(current_employer, "name", None),
-        "company_name": getattr(current_employer, "company_name", None),
-        "email": getattr(current_employer, "email", None),
-        "email_verified": getattr(current_employer, "email_verified", False),
-        "gstin": getattr(current_employer, "gstin", None)
+        "name": getattr(current_employee, "name", None),
+        "title": getattr(current_employee, "title", None),
+        "email": getattr(current_employee, "email", None),
+        "email_verified": getattr(current_employee, "email_verified", False),
+        "is_profile_complete": bool(
+            getattr(current_employee, "name", None) and 
+            getattr(current_employee, "skills", None) and 
+            getattr(current_employee, "total_experience", None)
+        )
     }
-
 # --- PROFILE & ACCOUNT MANAGEMENT (SECURE) ---
 @router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
 async def update_employer_phone(
