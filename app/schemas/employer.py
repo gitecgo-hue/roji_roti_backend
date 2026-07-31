@@ -141,3 +141,11 @@ class EmployerCompanyProfileResponse(BaseModel):
     description: Optional[str] = None
     social_profiles: Optional[Dict[str, str]] = None
     address: Optional[str] = None
+
+class CompanyProfilePublicResponse(BaseModel):
+    employer_id: str
+    recruiter_name: Optional[str] = None
+    company_name: Optional[str] = None
+    industry: Optional[str] = None
+    email: Optional[str] = None
+    logo_url: Optional[str] = None

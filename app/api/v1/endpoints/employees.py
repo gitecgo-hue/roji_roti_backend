@@ -31,7 +31,8 @@ from app.schemas.employee import ( # There is a duplicate EmployeeProfileUpdate 
     WorkExperienceInput,
     AppliedJobResponse,
     SavedJobResponse
-)
+    )
+from app.schemas.employer import CompanyProfilePublicResponse
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType
@@ -734,6 +735,42 @@ async def unsave_job(
         return {"message": "Job removed from saved list", "saved": False}
         
     return {"message": "Job was not in saved list", "saved": False}
+
+# --- to view the company profile ---
+@router.get("/companyprofile/{employer_id}", response_model=CompanyProfilePublicResponse, status_code=status.HTTP_200_OK)
+async def get_public_company_profile(employer_id: str):
+    """
+    Retrieves the basic, public-facing profile of a company/employer.
+    Useful for employees to view who is hiring them.
+    """
+    # 1. Safely validate that the provided ID is a valid MongoDB ObjectId
+    try:
+        parsed_id = PydanticObjectId(employer_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid Employer ID format."
+        )
+
+    # 2. Fetch the employer from the database
+    employer = await Employer.get(parsed_id)
+    
+    # 3. Handle cases where the employer doesn't exist
+    if not employer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Company profile not found."
+        )
+        
+    # 4. Safely map and return ONLY the allowed public fields
+    return CompanyProfilePublicResponse(
+        employer_id=str(employer.id),
+        recruiter_name=getattr(employer, "name", "Not Provided"),
+        company_name=getattr(employer, "company_name", "Not Provided"),
+        industry=getattr(employer, "industry", "Not Provided"),
+        email=getattr(employer, "email", "Not Provided"),
+        logo_url=getattr(employer, "logo_url", None)
+    )
 
 # --- Category of jobs ---
 
