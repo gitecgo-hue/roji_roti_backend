@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from beanie import PydanticObjectId
 from bson import ObjectId
 import pymongo
+import math
+import re
 
 # ---- Import Models ---
 from app.models.notification import Notification, NotificationType
@@ -47,11 +49,9 @@ router = APIRouter()
 # --- Pydantic Schemas (Local to Search) ---
 
 class JobSearchQuery(BaseModel):
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    place_name: Optional[str] = None
-    radius_km: int = 10
-    category: Optional[str] = None
+    keyword: Optional[str] = None     
+    location: Optional[str] = None    
+    experience: Optional[str] = None
 
 
 # =====================================================================
@@ -177,29 +177,38 @@ async def get_all_jobs():
         "jobs": jobs
     }
 
+# =====================================================================
+# EMPLOYEE: SMART JOB RECOMMENDATIONS (Dynamic Feed)
+# =====================================================================
 @router.get("/feed", response_model=dict)
 async def get_smart_job_recommendations(
-    lat: Optional[float] = None, 
-    lon: Optional[float] = None, 
-    radius_km: int = 5, # Defaults to 5km, frontend can change to 10km
-    current_employee: Employee = Depends(get_current_employee)
+    lat: Optional[float] = Query(None, description="User's latitude"), 
+    lon: Optional[float] = Query(None, description="User's longitude"), 
+    radius_km: int = Query(5, description="Search radius in kilometers"),
+    job_category: Optional[str] = Query(None, description="Optional category to filter by"),
+    location_name: Optional[str] = Query(None, description="Optional city name if GPS is off")
 ):
     """
-    Smart Feed: Dynamically loads jobs based on their exact trade category.
-    If GPS is provided, draws a literal circle around the user to find nearby jobs!
+    Public Smart Feed: Dynamically loads jobs. 
+    Does NOT require authentication.
+    If GPS is provided, draws a literal circle around the coordinates to find nearby jobs.
     """
     feed_items = {}
     
-    # 1. Fetch National Level Jobs First (Remote/Pan-India for their trade)
-    feed_items["national_jobs"] = await Job.find(
-        Job.is_pan_india == True, 
-        Job.is_active == True,
-        Job.job_category == current_employee.job_category 
-    ).limit(10).to_list()
+    # 1. Fetch National Level Jobs First (Remote/Pan-India)
+    national_query = {
+        "is_pan_india": True, 
+        "is_active": True,
+        "status": "published"
+    }
+    if job_category:
+        national_query["job_category"] = job_category
+        
+    feed_items["national_jobs"] = await Job.find(national_query).limit(10).to_list()
 
     # 2. Fallback: If frontend didn't send GPS coords, try to geocode their typed city name
-    if not lat or not lon:
-        coords = await get_coordinates_from_name(current_employee.location_name)
+    if not (lat and lon) and location_name:
+        coords = await get_coordinates_from_name(location_name)
         if coords:
             lon, lat = coords
 
@@ -207,23 +216,21 @@ async def get_smart_job_recommendations(
     if lat and lon:
         search_filter = {
             "is_active": True,
+            "status": "published",
             "is_pan_india": False,
-            # Match their specific trade (e.g., "Electrician")
-            "job_category": current_employee.job_category, 
-            
-            # Draw the radius circle
             "current_location": {
                 "$near": {
                     "$geometry": {
                         "type": "Point", 
                         "coordinates": [lon, lat] # [longitude, latitude]
                     },
-                    # Convert kilometers to meters for MongoDB
                     "$maxDistance": radius_km * 1000 
                 }
             }
         }
-        
+        if job_category:
+            search_filter["job_category"] = job_category
+            
         # Fetch jobs sorted automatically by nearest distance!
         nearby_jobs = await Job.find(search_filter).to_list()
         
@@ -233,92 +240,239 @@ async def get_smart_job_recommendations(
 
     else:
         # 4. Ultimate Fallback: Text matching if both GPS and Geocoding completely fail
-        fallback_jobs = await Job.find(
-            Job.job_city == current_employee.location_name,
-            Job.job_category == current_employee.category,
-            Job.is_active == True
-        ).limit(20).to_list()
+        fallback_query = {
+            "is_active": True,
+            "status": "published"
+        }
+        
+        if job_category:
+            fallback_query["job_category"] = job_category
+            
+        if location_name:
+            # Case-insensitive text match for the city
+            loc_regex = re.compile(f"{re.escape(location_name)}", re.IGNORECASE)
+            fallback_query["$or"] = [
+                {"job_city": loc_regex},
+                {"location_name": loc_regex}
+            ]
 
-        feed_items["radius_searched_km"] = "N/A (Text Match)"
+        # Fetch newest jobs matching the fallback criteria
+        fallback_jobs = await Job.find(fallback_query).sort("-created_at").limit(20).to_list()
+
+        feed_items["radius_searched_km"] = "N/A (Text Match / Global Recent)"
         feed_items["matches_found"] = len(fallback_jobs)
         feed_items["recommended_jobs"] = fallback_jobs
 
     return feed_items
 
+# ----------------------------------------------------------------
+# GLOBAL JOB RECOMMENDATIONS (Completely ignores location)
+# ----------------------------------------------------------------
+@router.get("/recommendations", status_code=status.HTTP_200_OK)
+async def get_global_job_recommendations(
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page (max 100)"),
+    category: Optional[str] = Query(None, description="Optional job category to filter by"),
+    skills: Optional[List[str]] = Query(None, description="Optional list of skills to filter by")
+):
+    """
+    Returns a global feed of jobs with partial matching (half-spellings).
+    If a typo results in 0 matches, it falls back to suggesting the newest jobs.
+    """
+    # 1. Base Query: Only show active, published jobs
+    base_query = {
+        "is_active": True,
+        "status": "published"
+    }
+    
+    # Clone the base query so we can modify it safely
+    query = dict(base_query)
+
+    # 2. Build Recommendation Logic (Partial Matches & Forgiving Regex)
+    or_conditions = []
+    
+    if category and category.strip():
+        clean_category = " ".join(category.split())
+        # Removed ^ and $ to allow partial string matches 
+        # (e.g. "driv" will match "Driving", "dev" matches "Developer")
+        or_conditions.append({
+            "job_category": re.compile(f"{re.escape(clean_category)}", re.IGNORECASE)
+        })
+
+    if skills:
+        clean_skills = [" ".join(s.split()) for s in skills if s.strip()]
+        if clean_skills:
+            regex_skills = [
+                re.compile(f"{re.escape(s)}", re.IGNORECASE) 
+                for s in clean_skills
+            ]
+            or_conditions.append({"skills_preference": {"$in": regex_skills}})
+
+    if or_conditions:
+        query["$and"] = [{"$or": or_conditions}]
+
+    # 3. First Attempt: Calculate Pagination & Fetch Data
+    total_matches = await Job.find(query).count()
+    is_suggestion_fallback = False
+
+    # 4. FALLBACK LOGIC: If typos are so bad that 0 jobs matched...
+    if total_matches == 0 and or_conditions:
+        # Revert back to the base query (fetch newest global jobs instead)
+        query = dict(base_query)
+        total_matches = await Job.find(query).count()
+        is_suggestion_fallback = True # Flag this so the frontend knows!
+
+    skip_count = (page - 1) * limit
+    total_pages = math.ceil(total_matches / limit) if total_matches > 0 else 1
+
+    # 5. Fetch the Data
+    recommended_jobs = await Job.find(query).sort("-created_at").skip(skip_count).limit(limit).to_list()
+
+    # 6. Return response with the fallback flag
+    return {
+        "metadata": {
+            "is_exact_match": not is_suggestion_fallback,
+            "message": "Results found" if not is_suggestion_fallback else "No exact matches found. Showing recommended suggestions instead."
+        },
+        "pagination": {
+            "current_page": page,
+            "limit": limit,
+            "total_matches": total_matches,
+            "total_pages": total_pages,
+            "has_next_page": page < total_pages,
+            "has_prev_page": page > 1
+        },
+        "results": recommended_jobs
+    }
+
 # =====================================================================
 # EMPLOYEE: JOB SEARCH (Advanced)
 # =====================================================================
-
-@router.post("/search", response_model=List[JobResponse])
-async def search_jobs(query: JobSearchQuery):
+@router.get("/search", response_model=List[JobResponse])
+async def search_jobs(
+    keyword: Optional[str] = Query(None, description="Search by skills, company, title"),
+    location: Optional[str] = Query(None, description="Search by city or location"),
+    experience: Optional[List[str]] = Query(None, description="e.g., '0-1 yrs', '1-3 yrs'"),
+    work_mode: Optional[List[str]] = Query(None, description="e.g., 'Remote', 'Hybrid', 'Onsite'"),
+    job_type: Optional[List[str]] = Query(None, description="e.g., 'Full-time', 'Internship'"),
+    salary: Optional[List[str]] = Query(None, description="e.g., '0-10L', '10-25L'")
+):
     """
-    Advanced job searching supporting both raw text (location_name) and Geospatial radiuses.
-    Strictly filters out any jobs that are not published and active.
+    Advanced GET job search combining text search and multiple checkbox filters.
+    Supports partial word matching (e.g., 'driv' matches 'Driver').
+    Ignores empty fields sent by the frontend to prevent query failures.
     """
-    lon, lat = query.lon, query.lat
+    # 1. Base Query: Only show active, published jobs
+    db_query = {
+        "is_active": True, 
+        "status": "published"
+    }
 
-    # 1. Name to Coordinates
-    if query.place_name and not (lon and lat):
-        coords = await get_coordinates_from_name(query.place_name)
-        if coords:
-            lon, lat = coords
+    and_conditions = []
 
-    # 2. Execute the Search (Either Fallback or Geo-Search)
-    if not (lon and lat):
-        # Fallback: If no coordinates found, do a text search
-        fallback = {
-            "is_active": True, 
-            "status": "published",
-            "$or": [{"is_pan_india": True}]
-        }
-        if query.place_name:
-            fallback["$or"].append({"location_name": query.place_name})
-            fallback["$or"].append({"locations": query.place_name})
-        if query.category:
-            fallback["category"] = query.category
-        
-        jobs = await Job.find(fallback).to_list()
-    else:
-        # Geo-Search: If we HAVE coordinates, run the spatial query
-        geo_filter = {
-            "current_location": {
-                "$nearSphere": { 
-                    "$geometry": {
-                        "type": "Point", 
-                        "coordinates": [lon, lat]
-                    },
-                    "$maxDistance": query.radius_km * 1000
-                }
-            },
-            "is_active": True,
-            "status": "published"
-        }
-        if query.category:
-            geo_filter["category"] = query.category
+    # 2. Top Search Bar: Keyword (Partial Word Match)
+    if keyword and keyword.strip():
+        # Split into words to allow partial matching on multiple fragments 
+        # e.g., "soft eng" matches "Software Engineer"
+        words = keyword.strip().split()
+        for word in words:
+            # By not using ^ and $, this inherently searches for half-words anywhere in the string
+            kw_regex = re.compile(f"{re.escape(word)}", re.IGNORECASE)
             
-        jobs = await Job.find(geo_filter).to_list()
+            and_conditions.append({
+                "$or": [
+                    {"job_title": kw_regex},
+                    {"job_category": kw_regex},
+                    {"skills_preference": kw_regex}
+                ]
+            })
 
-    # 3. Format the response
+    # 3. Top Search Bar: Location (Partial Word Match)
+    if location and location.strip():
+        loc_regex = re.compile(f"{re.escape(location.strip())}", re.IGNORECASE)
+        
+        and_conditions.append({
+            "$or": [
+                {"job_city": loc_regex},
+                {"locations": loc_regex},
+                {"location_name": loc_regex},
+                {"address": loc_regex},
+                {"is_pan_india": True} 
+            ]
+        })
+
+    # 4. Sidebar Filters: Experience (Cleaned to prevent [""] crashes)
+    if experience:
+        valid_exp = [e.strip() for e in experience if e and e.strip()]
+        if valid_exp:
+            exp_regex_list = [re.compile(f"{re.escape(e)}", re.IGNORECASE) for e in valid_exp]
+            and_conditions.append({
+                "$or": [
+                    {"total_experience_required": {"$in": exp_regex_list}},
+                    {"required_experience": {"$in": exp_regex_list}}
+                ]
+            })
+
+    # 5. Sidebar Filters: Work Mode 
+    if work_mode:
+        valid_modes = [m.strip() for m in work_mode if m and m.strip()]
+        if valid_modes:
+            mode_conditions = []
+            for mode in valid_modes:
+                if mode.lower() == "remote":
+                    mode_conditions.extend([re.compile("remote", re.IGNORECASE), re.compile("work from home", re.IGNORECASE)])
+                elif mode.lower() == "onsite":
+                    mode_conditions.extend([re.compile("onsite", re.IGNORECASE), re.compile("work from office", re.IGNORECASE)])
+                else:
+                    mode_conditions.append(re.compile(f"{re.escape(mode)}", re.IGNORECASE))
+                    
+            and_conditions.append({"work_location_type": {"$in": mode_conditions}})
+
+    # 6. Sidebar Filters: Job Type
+    if job_type:
+        valid_types = [t.strip() for t in job_type if t and t.strip()]
+        if valid_types:
+            type_regex_list = [re.compile(f"{re.escape(j)}", re.IGNORECASE) for j in valid_types]
+            and_conditions.append({"job_type": {"$in": type_regex_list}})
+
+    # 7. Sidebar Filters: Salary 
+    if salary:
+        valid_salaries = [s.strip() for s in salary if s and s.strip()]
+        if valid_salaries:
+            salary_conditions = []
+            for s in valid_salaries:
+                s_clean = s.replace(" ", "").upper()
+                if s_clean == "0-10L":
+                    salary_conditions.append({"min_fixed_salary": {"$lte": 1000000}})
+                elif s_clean == "10-25L":
+                    salary_conditions.append({"min_fixed_salary": {"$gte": 1000000, "$lte": 2500000}})
+                elif s_clean == "25-50L":
+                    salary_conditions.append({"min_fixed_salary": {"$gte": 2500000, "$lte": 5000000}})
+                elif s_clean == "50L+":
+                    salary_conditions.append({"min_fixed_salary": {"$gte": 5000000}})
+                    
+            if salary_conditions:
+                and_conditions.append({"$or": salary_conditions})
+
+    # 8. Apply all conditions to the final MongoDB query
+    if and_conditions:
+        db_query["$and"] = and_conditions
+
+   # 9. Execute the Search
+    jobs = await Job.find(db_query).sort("-created_at").to_list()
+
+    # 10. Safely format the response by dumping the exact database model fields
     formatted_jobs = []
     for job in jobs:
-        formatted_jobs.append(
-            JobResponse(
-                id=job.id, 
-                employer_id=job.employer_id,
-                title=job.title,
-                description=job.description,
-                category=job.category,
-                location_name=job.location_name,
-                is_pan_india=job.is_pan_india,
-                locations=job.locations,
-                salary_range=job.salary_range,
-                requirements=job.requirements,
-                required_experience=job.required_experience,
-                is_urgent=job.is_urgent,
-                is_active=job.is_active,
-                created_at=job.created_at
-            )
-        )
+        # Convert the Beanie database model into a standard Python dictionary
+        # Use .dict() for Pydantic v1, or .model_dump() for Pydantic v2
+        job_data = job.model_dump() if hasattr(job, "model_dump") else job.dict()
+        
+        # Ensure the MongoDB ObjectId is converted to a string for the response
+        job_data["id"] = str(job.id)
+        
+        # Unpack the dictionary directly into your response model
+        formatted_jobs.append(JobResponse(**job_data))
         
     return formatted_jobs
 
@@ -356,6 +510,12 @@ async def get_single_job(job_id: str):
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="This job is no longer available."
         )
+
+    # Query the JobApplication collection for this exact job_id
+    actual_applicant_count = await JobApplication.find({"job_id": str(job.id)}).count()
+    
+    # Override the static database number with the true real-time count
+    job.applicants_count = actual_applicant_count
 
     return job
 

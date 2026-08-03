@@ -175,4 +175,4 @@ class SavedJobResponse(BaseModel):
     job_title: Optional[str] = None
     company_name: Optional[str] = None
     location: Optional[str] = None
-    expected_salary: Optional[float] = None 
+    expected_salary: Optional[str] = None

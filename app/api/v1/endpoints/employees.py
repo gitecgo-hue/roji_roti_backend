@@ -330,12 +330,12 @@ async def update_employee_profile(
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # 1. Handle Email Changes
+    # Handle Email Changes
     if update_dict.get("email") and update_dict["email"] != getattr(current_employee, "email", None):
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
-    # 2. Map Direct/Simple Fields
+    # Map Direct/Simple Fields
     direct_fields = ["name", "title", "location_name", "total_experience"]
     for field in direct_fields:
         if field in update_dict:
@@ -343,7 +343,7 @@ async def update_employee_profile(
 
     # --- EXPANDED SAFETY NET: Put object creation inside the try block ---
     try:
-        # 3. Map Complex Fields 
+        # Map Complex Fields 
         if update_dict.get("skills"):
             current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
 
@@ -360,7 +360,7 @@ async def update_employee_profile(
         if update_dict.get("resume_url"):
             current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
             
-        # 4. Safely save the mapped data
+        # Safely save the mapped data
         await current_employee.save()
         
     except ValidationError as e:
@@ -414,8 +414,9 @@ async def update_employee_phone(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or expired OTP for the new phone number."
         )
-
-    otp_record.code = None # Consume the OTP after successful verification
+    
+    # Consume the OTP after successful verification
+    otp_record.code = None 
     await otp_record.save()
 
     current_employee.phone = clean_new_phone
@@ -511,7 +512,7 @@ async def download_employee_resume(
     Generates a PDF dynamically if the employee hasn't uploaded a static file.
     """
     
-    # --- 1. AUTHORIZATION & QUOTA CHECKS ---
+    # --- AUTHORIZATION & QUOTA CHECKS ---
     if current_user.role == "employee":
         # Employees cannot snoop on other employees' resumes
         if str(current_user.id) != employee_id:
@@ -527,17 +528,17 @@ async def download_employee_resume(
     else:
         raise HTTPException(status_code=403, detail="Unauthorized role.")
 
-    # --- 2. FETCH THE EMPLOYEE ---
+    # --- FETCH THE EMPLOYEE ---
     employee = await Employee.get(ObjectId(employee_id))
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found.")
 
-    # --- 3. RETURN OR GENERATE THE RESUME ---
+    # --- RETURN OR GENERATE THE RESUME ---
     # Scenario A: If a static resume is uploaded (e.g., S3/Cloudinary URL exists)
     if getattr(employee, "resume_url", None):
         return RedirectResponse(url=employee.resume_url)
         
-    # Scenario B: Generate the PDF synchronously on the fly (NO 'await' keyword)
+    # Generate the PDF synchronously on the fly
     pdf_content = ResumeService.generate_pdf(employee)
     
     # Sanitize the filename to prevent header injection errors
@@ -593,7 +594,7 @@ async def apply_for_job(
     if existing_application:
         raise HTTPException(status_code=400, detail="You have already applied for this job.")
 
-    # 1. Create the application
+    # Create the application
     new_app = JobApplication(
         job_id=job.id,
         employee_id=current_employee.id,
@@ -601,10 +602,14 @@ async def apply_for_job(
         status=ApplicationStatus.APPLIED
     )
     
-    # 2. SAVE THE APPLICATION TO THE DATABASE (This was missing!)
+    # SAVE THE APPLICATION TO THE DATABASE
     await new_app.insert()
 
-    # 3. Send the notification to the employer. The service expects a 'user_id' parameter.
+    # We already fetched 'job' at the top, so we just increment and save!
+    job.applicants_count += 1
+    await job.save()
+
+    # Send the notification to the employer. The service expects a 'user_id' parameter.
     await NotificationService.notify_user(
         user_id=str(job.employer_id),
         title="New Application Received!",
@@ -743,7 +748,7 @@ async def get_public_company_profile(employer_id: str):
     Retrieves the basic, public-facing profile of a company/employer.
     Useful for employees to view who is hiring them.
     """
-    # 1. Safely validate that the provided ID is a valid MongoDB ObjectId
+    # Safely validate that the provided ID is a valid MongoDB ObjectId
     try:
         parsed_id = PydanticObjectId(employer_id)
     except Exception:
@@ -752,17 +757,17 @@ async def get_public_company_profile(employer_id: str):
             detail="Invalid Employer ID format."
         )
 
-    # 2. Fetch the employer from the database
+    # Fetch the employer from the database
     employer = await Employer.get(parsed_id)
     
-    # 3. Handle cases where the employer doesn't exist
+    # Handle cases where the employer doesn't exist
     if not employer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, 
             detail="Company profile not found."
         )
         
-    # 4. Safely map and return ONLY the allowed public fields
+    # Safely map and return ONLY the allowed public fields
     return CompanyProfilePublicResponse(
         employer_id=str(employer.id),
         recruiter_name=getattr(employer, "name", "Not Provided"),
