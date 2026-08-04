@@ -692,7 +692,7 @@ async def get_applied_jobs(
 # --- GET ALL SAVED JOBS ---
 @router.get("/jobs/saved", response_model=List[SavedJobResponse])
 async def get_saved_jobs(
-    current_employee: Employee = Depends(get_current_employee)
+    current_employee = Depends(get_current_employee) # Type hint: current_employee: Employee
 ):
     """
     Retrieves the full details of all jobs the employee has saved.
@@ -723,7 +723,8 @@ async def get_saved_jobs(
                 "job_title": getattr(job, "job_title", "Unknown Title"),
                 "company_name": getattr(employer, "company_name", "Unknown Company") if employer else "Unknown Company",
                 "location": getattr(job, "job_city", "Not specified"),
-                "expected_salary": salary_str
+                "expected_salary": salary_str,
+                "created_at": getattr(job, "created_at", None) # <--- ADDED FIELD
             })
         else:
             # Optional: Clean up the database by removing IDs of jobs that no longer exist

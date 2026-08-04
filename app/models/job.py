@@ -75,7 +75,7 @@ class Job(Document):
     locations: Optional[List[str]] = []
     
     # The Geospatial Field for radius searches
-    current_location: Optional[GeoPoint] = None 
+    location_point: Optional[GeoPoint] = None
     is_pan_india: bool = False
     
     # --- Salary & Pay ---
@@ -121,5 +121,5 @@ class Job(Document):
             "job_category",
             "status",
             # The Geospatial Map Index for rapid 5km/10km radius searching
-            [("current_location", pymongo.GEOSPHERE)]
+            [("location_point", "2dsphere")]    
         ]

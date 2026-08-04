@@ -84,13 +84,14 @@ async def match_and_notify_employees(job_id: str, job_category: str, job_city: s
 async def create_job(
     job_data: JobCreateRequest,
     background_tasks: BackgroundTasks,
-    current_employer: Employer = Depends(get_current_employer)
+    current_employer = Depends(get_current_employer) # Added type hint if needed: current_employer: Employer
 ):
     """
     Creates a new job posting for the logged-in employer.
+    Automatically fetches and formats geospatial coordinates for the local job feed.
     The job is only visible in feeds and triggers notifications if the status is "published".
     """
-    # Map the incoming Pydantic schema to the Beanie Database Model
+    # 1. Map the incoming Pydantic schema to the Beanie Database Model
     new_job = Job(
         employer_id=str(current_employer.id),
         
@@ -125,16 +126,27 @@ async def create_job(
         
         # --- Visibility Control ---
         status=job_data.status,
-        
-        # Automatically hide from the Smart Feed unless published
-        # (Assuming your feed filters using Job.is_active == True)
         is_active=True if job_data.status == "published" else False
     )
 
-    # Save to database (Only called once!)
+    # 2. AUTO-GEOCODING: Fetch coordinates if it is a local job
+    if not new_job.is_pan_india and new_job.job_city:
+        # Combine address and city for a more accurate map search
+        search_string = f"{new_job.address}, {new_job.job_city}" if new_job.address else new_job.job_city
+        
+        coords = await get_coordinates_from_name(search_string)
+        if coords:
+            lon, lat = coords
+            # Construct the exact GeoJSON format MongoDB requires (Longitude FIRST!)
+            new_job.location_point = {
+                "type": "Point",
+                "coordinates": [lon, lat]
+            }
+
+    # 3. Save to database (Only called once!)
     await new_job.insert()
 
-    # --- ONLY Trigger Alerts if the Job is actually PUBLISHED ---
+    # 4. --- ONLY Trigger Alerts if the Job is actually PUBLISHED ---
     if new_job.status == "published":
         
         # Alert the Admins immediately
@@ -184,50 +196,40 @@ async def get_all_jobs():
 async def get_smart_job_recommendations(
     lat: Optional[float] = Query(None, description="User's latitude"), 
     lon: Optional[float] = Query(None, description="User's longitude"), 
-    radius_km: int = Query(5, description="Search radius in kilometers"),
+    radius_km: int = Query(15, description="Search radius in kilometers (City boundary)"),
     job_category: Optional[str] = Query(None, description="Optional category to filter by"),
     location_name: Optional[str] = Query(None, description="Optional city name if GPS is off")
 ):
     """
-    Public Smart Feed: Dynamically loads jobs. 
-    Does NOT require authentication.
-    If GPS is provided, draws a literal circle around the coordinates to find nearby jobs.
+    Strict Local Feed: Dynamically loads jobs based strictly on the user's device location.
+    Does NOT show national jobs or jobs outside the designated radius.
     """
     feed_items = {}
-    
-    # 1. Fetch National Level Jobs First (Remote/Pan-India)
-    national_query = {
-        "is_pan_india": True, 
-        "is_active": True,
-        "status": "published"
-    }
-    if job_category:
-        national_query["job_category"] = job_category
-        
-    feed_items["national_jobs"] = await Job.find(national_query).limit(10).to_list()
 
-    # 2. Fallback: If frontend didn't send GPS coords, try to geocode their typed city name
+    # 1. Fallback: If frontend didn't send GPS coords, try to geocode their typed city name
     if not (lat and lon) and location_name:
         coords = await get_coordinates_from_name(location_name)
         if coords:
             lon, lat = coords
 
-    # 3. Geospatial Local Job Query (The Smart Engine)
+    # 2. Geospatial Local Job Query (The Strict Boundary Engine)
     if lat and lon:
         search_filter = {
             "is_active": True,
             "status": "published",
-            "is_pan_india": False,
-            "current_location": {
+            "is_pan_india": False, # Strict block against nationwide jobs
+            "location_point": {  # <--- UPDATED FROM "current_location"
                 "$near": {
                     "$geometry": {
                         "type": "Point", 
                         "coordinates": [lon, lat] # [longitude, latitude]
                     },
+                    # This is the hard cut-off. MongoDB will not return jobs further than this!
                     "$maxDistance": radius_km * 1000 
                 }
             }
         }
+        
         if job_category:
             search_filter["job_category"] = job_category
             
@@ -239,10 +241,11 @@ async def get_smart_job_recommendations(
         feed_items["recommended_jobs"] = nearby_jobs
 
     else:
-        # 4. Ultimate Fallback: Text matching if both GPS and Geocoding completely fail
+        # 3. Ultimate Fallback: Text matching if both GPS and Geocoding completely fail
         fallback_query = {
             "is_active": True,
-            "status": "published"
+            "status": "published",
+            "is_pan_india": False 
         }
         
         if job_category:
@@ -255,11 +258,18 @@ async def get_smart_job_recommendations(
                 {"job_city": loc_regex},
                 {"location_name": loc_regex}
             ]
+        else:
+            # If the user provides absolutely no location (No GPS, No Text), return empty
+            # because we cannot guarantee the jobs will be local to them.
+            feed_items["radius_searched_km"] = "No location provided"
+            feed_items["matches_found"] = 0
+            feed_items["recommended_jobs"] = []
+            return feed_items
 
-        # Fetch newest jobs matching the fallback criteria
+        # Fetch newest jobs matching the text fallback criteria
         fallback_jobs = await Job.find(fallback_query).sort("-created_at").limit(20).to_list()
 
-        feed_items["radius_searched_km"] = "N/A (Text Match / Global Recent)"
+        feed_items["radius_searched_km"] = "N/A (Text Match)"
         feed_items["matches_found"] = len(fallback_jobs)
         feed_items["recommended_jobs"] = fallback_jobs
 

@@ -176,3 +176,4 @@ class SavedJobResponse(BaseModel):
     company_name: Optional[str] = None
     location: Optional[str] = None
     expected_salary: Optional[str] = None
+    created_at: Optional[datetime] = None
