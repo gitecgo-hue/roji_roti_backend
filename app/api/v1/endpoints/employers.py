@@ -31,6 +31,7 @@ from app.models.saved_search import SavedSearch
 from app.models.application import JobApplication, ApplicationStatus
 
 # --- Service Imports ---
+from app.services.cloudinary_service import upload_file
 from app.services.notification import NotificationService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
@@ -254,13 +255,13 @@ async def get_company_profile(
 @router.post("/profile/upload_logo")
 async def upload_company_logo(
     file: UploadFile = File(...),
-    current_employer: Employer = Depends(get_current_employer)
+    current_employer = Depends(get_current_employer) # Ensure type hint if needed: current_employer: Employer
 ):
     """
-    Uploads a company logo or profile picture for the employer.
-    Accepts image files (JPEG, PNG).
+    Uploads a company logo or profile picture for the employer to Cloudinary.
+    Accepts image files (JPEG, PNG, WEBP) up to 5MB.
     """
-    # Validate the file type
+    # 1. Validate the file type
     allowed_content_types = ["image/jpeg", "image/png", "image/webp"]
     if file.content_type not in allowed_content_types:
         raise HTTPException(
@@ -268,8 +269,7 @@ async def upload_company_logo(
             detail="Invalid file type. Please upload a JPEG, PNG, or WEBP image."
         )
         
-    # Validate file size - e.g., max 5MB
-    # Note: FastAPI loads large files to disk automatically, but checking size is good practice
+    # 2. Validate file size - e.g., max 5MB
     file.file.seek(0, 2) # Go to the end of the file
     file_size = file.file.tell() # Get the size
     file.file.seek(0) # Reset the cursor back to the beginning for reading
@@ -280,26 +280,23 @@ async def upload_company_logo(
             detail="File size too large. Maximum size is 5MB."
         )
 
-    # Generate a unique filename to prevent overwrites
-    file_extension = file.filename.split(".")[-1]
-    unique_filename = f"employer_{current_employer.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
-    
-    # UPLOAD TO CLOUD STORAGE (AWS S3, Cloudinary, etc.)
-    # Replace this block with your actual cloud upload logic.
-    # Example:
-    # uploaded_url = await s3_client.upload(file.file, unique_filename)
-    
-    # --- MOCK UPLOAD (For demonstration purposes) ---
-    uploaded_url = f"https://your-cloud-storage.com/uploads/logos/{unique_filename}"
-
-    # Update the employer's profile in the database
-    current_employer.logo_url = uploaded_url
-    await current_employer.save()
-    
-    return {
-        "message": "Logo uploaded successfully",
-        "logo_url": current_employer.logo_url
-    }
+    # 3. Upload to Cloudinary
+    try:
+        # We pass a specific folder name to keep your Cloudinary dashboard organized
+        uploaded_url = await upload_file(file, folder_name="employer_logos")
+        
+        # 4. Update the employer's profile in the database
+        current_employer.logo_url = uploaded_url
+        await current_employer.save()
+        
+        return {
+            "message": "Logo uploaded successfully!",
+            "logo_url": current_employer.logo_url
+        }
+        
+    except ValueError as e:
+        # Catches the error thrown by our Cloudinary service
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- UPDATE PERSONAL & COMPANY PROFILE ---
 # --- PROFILE UPDATE ---

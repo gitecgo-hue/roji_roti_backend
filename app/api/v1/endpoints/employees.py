@@ -62,6 +62,7 @@ from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
 from app.services.recommendation import RecommendationService
 from app.services.parser import ResumeParserService
+from app.services.cloudinary_service import upload_file
 
 # --- Utilities Imports ---
 from app.utils.storage import StorageService
@@ -294,29 +295,47 @@ async def update_profile_photo(
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Uploads a profile picture and updates the employee's record.
+    Uploads a profile picture to Cloudinary and updates the employee's record.
     """
-    if not file.content_type.startswith("image/"):
+    # 1. Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp"]
+    if file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="File must be an image"
+            detail="Invalid file type. Only JPG, PNG, and WEBP are allowed."
+        )
+        
+    # 2. Validate file size (e.g., max 5MB)
+    file.file.seek(0, 2) # Go to the end of the file
+    file_size = file.file.tell() # Get the size
+    file.file.seek(0) # Reset the cursor back to the beginning for reading
+    
+    if file_size > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File size too large. Maximum size is 5MB."
         )
 
-    url = await StorageService.upload_image(file, folder="employees")
-    
-    if not url:
+    try:
+        # 3. Upload to Cloudinary
+        # Storing in the "employees" folder to match your previous setup
+        url = await upload_file(file, folder_name="employees")
+        
+        # 4. Save the new URL to the user's database document
+        current_employee.photo_url = url
+        await current_employee.save()
+        
+        return {
+            "message": "Profile photo updated successfully",
+            "photo_url": url
+        }
+        
+    except ValueError as e:
+        # Catches the error thrown by our Cloudinary service
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Cloud upload failed"
+            detail=str(e)
         )
-    
-    current_employee.photo_url = url
-    await current_employee.save()
-    
-    return {
-        "message": "Profile photo updated successfully",
-        "photo_url": url
-    }
 
 # --- Profile Update ---
 @router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
@@ -429,41 +448,51 @@ async def update_employee_phone(
     }
 
 # --- Resume Upload & Parsing ---
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
+# Ensure Employee, WorkExperienceInput, get_current_employee, ResumeParserService are imported
+from app.services.cloudinary_service import upload_file
+
 @router.post("/profile/upload_resume", status_code=status.HTTP_200_OK)
 async def upload_and_parse_resume(
     resume_file: UploadFile = File(...),
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    1. Uploads the PDF to cloud storage.
+    1. Uploads the PDF to Cloudinary.
     2. Extracts text from the PDF.
     3. Uses AI to parse the text into structured data.
     4. Auto-fills the employee's profile in the database.
     """
-    # Validate File Type
-    if not resume_file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF resumes are supported right now.")
+    # 1. Strict Validation for PDFs
+    if resume_file.content_type != "application/pdf" and not resume_file.filename.endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid file type. Only PDF resumes are accepted."
+        )
 
+    # 2. Upload to Cloudinary
+    try:
+        resume_url = await upload_file(resume_file, folder_name="candidate_resumes")
+        current_employee.resume_url = resume_url
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # 3. Read bytes for PDF text extraction
+    # CRITICAL: Reset the file pointer to the beginning because Cloudinary just read it!
+    await resume_file.seek(0)
     file_bytes = await resume_file.read()
 
-    # Upload the actual file to your cloud storage (AWS S3, Cloudinary, etc.)
-    # resume_url = await StorageService.upload_document(file_bytes, folder="resumes")
-    # current_employee.resume_url = resume_url
-
-    # Extract Text from the PDF
+    # 4. Extract Text from the PDF
     try:
         raw_text = await ResumeParserService.extract_text_from_pdf(file_bytes)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    # Ask the AI to parse the text into a structured dictionary
+    # 5. Ask the AI to parse the text into a structured dictionary
     parsed_data = await ResumeParserService.parse_resume_to_json(raw_text)
 
-    # Auto-Fill the Database Profile!
-    # We use 'getattr' or '.get()' to safely handle missing data if the AI couldn't find it.
-    
+    # 6. Auto-Fill the Database Profile!
     if parsed_data.get("skills"):
-        # Merge new skills with existing ones, avoiding duplicates
         existing_skills = set(current_employee.skills or [])
         existing_skills.update(parsed_data["skills"])
         current_employee.skills = list(existing_skills)
@@ -479,18 +508,18 @@ async def upload_and_parse_resume(
         current_employee.languages = parsed_data["languages"]
 
     if parsed_data.get("work_experience"):
-        # Convert the AI's raw dictionaries into your Pydantic WorkExperience models
         new_experiences = []
         for exp in parsed_data["work_experience"]:
             new_experiences.append(WorkExperienceInput(**exp))
         current_employee.work_experience = new_experiences
 
-    # Save the fully updated profile to MongoDB
+    # 7. Save the fully updated profile to MongoDB
     await current_employee.save()
 
     return {
         "status": "success",
-        "message": "Resume uploaded and profile successfully auto-filled!",
+        "message": "Resume uploaded to Cloudinary and profile successfully auto-filled!",
+        "resume_url": resume_url,
         "extracted_data": parsed_data,
         "profile": {
             "skills": current_employee.skills,

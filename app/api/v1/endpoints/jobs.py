@@ -360,7 +360,7 @@ async def search_jobs(
     """
     Advanced GET job search combining text search and multiple checkbox filters.
     Supports partial word matching (e.g., 'driv' matches 'Driver').
-    Ignores empty fields sent by the frontend to prevent query failures.
+    Strictly filters by the provided location.
     """
     # 1. Base Query: Only show active, published jobs
     db_query = {
@@ -372,11 +372,8 @@ async def search_jobs(
 
     # 2. Top Search Bar: Keyword (Partial Word Match)
     if keyword and keyword.strip():
-        # Split into words to allow partial matching on multiple fragments 
-        # e.g., "soft eng" matches "Software Engineer"
         words = keyword.strip().split()
         for word in words:
-            # By not using ^ and $, this inherently searches for half-words anywhere in the string
             kw_regex = re.compile(f"{re.escape(word)}", re.IGNORECASE)
             
             and_conditions.append({
@@ -387,7 +384,7 @@ async def search_jobs(
                 ]
             })
 
-    # 3. Top Search Bar: Location (Partial Word Match)
+    # 3. Top Search Bar: Location (Strict Location Match)
     if location and location.strip():
         loc_regex = re.compile(f"{re.escape(location.strip())}", re.IGNORECASE)
         
@@ -396,12 +393,12 @@ async def search_jobs(
                 {"job_city": loc_regex},
                 {"locations": loc_regex},
                 {"location_name": loc_regex},
-                {"address": loc_regex},
-                {"is_pan_india": True} 
+                {"address": loc_regex}
+                # {"is_pan_india": True} has been removed from here!
             ]
         })
 
-    # 4. Sidebar Filters: Experience (Cleaned to prevent [""] crashes)
+    # 4. Sidebar Filters: Experience
     if experience:
         valid_exp = [e.strip() for e in experience if e and e.strip()]
         if valid_exp:
@@ -458,20 +455,14 @@ async def search_jobs(
     if and_conditions:
         db_query["$and"] = and_conditions
 
-   # 9. Execute the Search
+    # 9. Execute the Search
     jobs = await Job.find(db_query).sort("-created_at").to_list()
 
     # 10. Safely format the response by dumping the exact database model fields
     formatted_jobs = []
     for job in jobs:
-        # Convert the Beanie database model into a standard Python dictionary
-        # Use .dict() for Pydantic v1, or .model_dump() for Pydantic v2
         job_data = job.model_dump() if hasattr(job, "model_dump") else job.dict()
-        
-        # Ensure the MongoDB ObjectId is converted to a string for the response
         job_data["id"] = str(job.id)
-        
-        # Unpack the dictionary directly into your response model
         formatted_jobs.append(JobResponse(**job_data))
         
     return formatted_jobs
