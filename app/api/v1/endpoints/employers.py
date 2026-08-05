@@ -32,6 +32,7 @@ from app.models.application import JobApplication, ApplicationStatus
 
 # --- Service Imports ---
 from app.services.cloudinary_service import upload_file
+from app.services.cloudinary_service import delete_file
 from app.services.notification import NotificationService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
@@ -297,6 +298,35 @@ async def upload_company_logo(
     except ValueError as e:
         # Catches the error thrown by our Cloudinary service
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- Profile Photo/Logo Deletion ---
+@router.delete("/profile_delete_logo", status_code=status.HTTP_200_OK)
+async def delete_employer_profile_picture(
+    current_employer = Depends(get_current_employer) # type: Employer
+):
+    """
+    Deletes the logged-in employer's profile picture from Cloudinary and the database.
+    """
+    if not current_employer.profile_picture_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="You do not have a profile picture to delete."
+        )
+
+    # 1. Delete from Cloudinary
+    deletion_successful = delete_image_from_cloudinary(current_employer.profile_picture_url)
+    
+    if not deletion_successful:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete the image from the cloud provider."
+        )
+
+    # 2. Remove the URL from the database and save
+    current_employer.profile_picture_url = None
+    await current_employer.save()
+
+    return {"message": "Profile picture deleted successfully."}
 
 # --- UPDATE PERSONAL & COMPANY PROFILE ---
 # --- PROFILE UPDATE ---

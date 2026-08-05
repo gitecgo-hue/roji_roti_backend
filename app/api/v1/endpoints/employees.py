@@ -63,6 +63,7 @@ from app.services.subscriptions import SubscriptionService
 from app.services.recommendation import RecommendationService
 from app.services.parser import ResumeParserService
 from app.services.cloudinary_service import upload_file
+from app.services.cloudinary_service import delete_file
 
 # --- Utilities Imports ---
 from app.utils.storage import StorageService
@@ -336,6 +337,35 @@ async def update_profile_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=str(e)
         )
+
+# --- Profile Photo Deletion ---
+@router.delete("/profile_photo_delete", status_code=status.HTTP_200_OK)
+async def delete_employee_profile_picture(
+    current_employee = Depends(get_current_employee) # type: Employee
+):
+    """
+    Deletes the logged-in employee's profile picture from Cloudinary and the database.
+    """
+    if not current_employee.profile_picture_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="You do not have a profile picture to delete."
+        )
+
+    # 1. Delete from Cloudinary
+    deletion_successful = delete_image_from_cloudinary(current_employee.profile_picture_url)
+    
+    if not deletion_successful:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete the image from the cloud provider."
+        )
+
+    # 2. Remove the URL from the database and save
+    current_employee.profile_picture_url = None
+    await current_employee.save()
+
+    return {"message": "Profile picture deleted successfully."}
 
 # --- Profile Update ---
 @router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
