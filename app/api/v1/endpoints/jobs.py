@@ -358,19 +358,23 @@ async def get_global_job_recommendations(
 # =====================================================================
 # EMPLOYEE: JOB SEARCH (Advanced)
 # =====================================================================
+from fastapi import APIRouter, Query
+from typing import List, Optional
+import re
+# Ensure JobResponse and Job models are imported
+
 @router.get("/search", response_model=List[JobResponse])
 async def search_jobs(
     keyword: Optional[str] = Query(None, description="Search by skills, company, title"),
     location: Optional[str] = Query(None, description="Search by city or location"),
-    experience: Optional[List[str]] = Query(None, description="e.g., '0-1 yrs', '1-3 yrs'"),
+    experience: Optional[List[str]] = Query(None, description="e.g., '0-1 yrs', '1-3 yrs', '3-5 yrs', '5+ yrs'"),
     work_mode: Optional[List[str]] = Query(None, description="e.g., 'Remote', 'Hybrid', 'Onsite'"),
-    job_type: Optional[List[str]] = Query(None, description="e.g., 'Full-time', 'Internship'"),
-    salary: Optional[List[str]] = Query(None, description="e.g., '0-10L', '10-25L'")
+    job_type: Optional[List[str]] = Query(None, description="e.g., 'Full-time', 'Part-time', 'Contract', 'Internship'"),
+    salary: Optional[List[str]] = Query(None, description="e.g., '0-10L', '10-25L', '25-50L', '50L+'")
 ):
     """
     Advanced GET job search combining text search and multiple checkbox filters.
-    Supports partial word matching (e.g., 'driv' matches 'Driver').
-    Strictly filters by the provided location.
+    Strictly handles UI mappings for Experience, Work Mode, Job Type, and Salary.
     """
     # 1. Base Query: Only show active, published jobs
     db_query = {
@@ -404,7 +408,6 @@ async def search_jobs(
                 {"locations": loc_regex},
                 {"location_name": loc_regex},
                 {"address": loc_regex}
-                # {"is_pan_india": True} has been removed from here!
             ]
         })
 
@@ -412,24 +415,37 @@ async def search_jobs(
     if experience:
         valid_exp = [e.strip() for e in experience if e and e.strip()]
         if valid_exp:
-            exp_regex_list = [re.compile(f"{re.escape(e)}", re.IGNORECASE) for e in valid_exp]
+            exp_conditions = []
+            for e in valid_exp:
+                # Normalize dashes just in case the frontend sends an en-dash (–)
+                e_clean = e.replace("–", "-")
+                exp_conditions.append(re.compile(f"{re.escape(e_clean)}", re.IGNORECASE))
+                
+                # Bonus fallback: If looking for 0-1 yrs, also match "Fresher" or "Any" based on your DB schema
+                if "0-1" in e_clean:
+                    exp_conditions.extend([re.compile("fresher", re.IGNORECASE), re.compile("any", re.IGNORECASE)])
+
             and_conditions.append({
                 "$or": [
-                    {"total_experience_required": {"$in": exp_regex_list}},
-                    {"required_experience": {"$in": exp_regex_list}}
+                    {"total_experience_required": {"$in": exp_conditions}},
+                    {"required_experience": {"$in": exp_conditions}}
                 ]
             })
 
-    # 5. Sidebar Filters: Work Mode 
+    # 5. Sidebar Filters: Work Mode (Mapped to match your DB values)
     if work_mode:
         valid_modes = [m.strip() for m in work_mode if m and m.strip()]
         if valid_modes:
             mode_conditions = []
             for mode in valid_modes:
-                if mode.lower() == "remote":
+                mode_lower = mode.lower()
+                if mode_lower == "remote":
                     mode_conditions.extend([re.compile("remote", re.IGNORECASE), re.compile("work from home", re.IGNORECASE)])
-                elif mode.lower() == "onsite":
-                    mode_conditions.extend([re.compile("onsite", re.IGNORECASE), re.compile("work from office", re.IGNORECASE)])
+                elif mode_lower == "hybrid":
+                    mode_conditions.append(re.compile("hybrid", re.IGNORECASE))
+                elif mode_lower == "onsite":
+                    # Mapped to handle standard DB values for onsite roles
+                    mode_conditions.extend([re.compile("onsite", re.IGNORECASE), re.compile("work from office", re.IGNORECASE), re.compile("field job", re.IGNORECASE)])
                 else:
                     mode_conditions.append(re.compile(f"{re.escape(mode)}", re.IGNORECASE))
                     
@@ -439,8 +455,18 @@ async def search_jobs(
     if job_type:
         valid_types = [t.strip() for t in job_type if t and t.strip()]
         if valid_types:
-            type_regex_list = [re.compile(f"{re.escape(j)}", re.IGNORECASE) for j in valid_types]
-            and_conditions.append({"job_type": {"$in": type_regex_list}})
+            type_conditions = []
+            for j_type in valid_types:
+                j_lower = j_type.lower()
+                # Ensure UI labels map to backend database snake_case formats
+                if j_lower == "full-time":
+                    type_conditions.extend([re.compile("full-time", re.IGNORECASE), re.compile("full_time", re.IGNORECASE)])
+                elif j_lower == "part-time":
+                    type_conditions.extend([re.compile("part-time", re.IGNORECASE), re.compile("part_time", re.IGNORECASE)])
+                else:
+                    type_conditions.append(re.compile(f"{re.escape(j_type)}", re.IGNORECASE))
+                    
+            and_conditions.append({"job_type": {"$in": type_conditions}})
 
     # 7. Sidebar Filters: Salary 
     if salary:
@@ -448,7 +474,9 @@ async def search_jobs(
         if valid_salaries:
             salary_conditions = []
             for s in valid_salaries:
-                s_clean = s.replace(" ", "").upper()
+                # Sanitize the string: remove spaces, convert to upper, and replace UI en-dashes with standard hyphens
+                s_clean = s.replace(" ", "").upper().replace("–", "-")
+                
                 if s_clean == "0-10L":
                     salary_conditions.append({"min_fixed_salary": {"$lte": 1000000}})
                 elif s_clean == "10-25L":
