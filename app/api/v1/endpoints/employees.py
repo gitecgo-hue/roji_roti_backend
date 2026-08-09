@@ -53,6 +53,7 @@ from app.models.review import Review
 from app.models.notification import Notification, NotificationType
 from app.models.auth import OTP 
 from app.models.category import Category
+from app.models.employee import Employee, WorkExperience
 
 # --- Services Imports ---
 from app.services.notification import NotificationService
@@ -478,14 +479,11 @@ async def update_employee_phone(
     }
 
 # --- Resume Upload & Parsing ---
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
-# Ensure Employee, WorkExperienceInput, get_current_employee, ResumeParserService are imported
-from app.services.cloudinary_service import upload_file
-
 @router.post("/profile/upload_resume", status_code=status.HTTP_200_OK)
 async def upload_and_parse_resume(
-    resume_file: UploadFile = File(...),
-    current_employee: Employee = Depends(get_current_employee)
+    # The parameter name here ('file') MUST match what the frontend/Swagger sends to avoid 422 errors
+    file: UploadFile = File(...),
+    current_employee = Depends(get_current_employee) # Added type hint if needed: current_employee: Employee
 ):
     """
     1. Uploads the PDF to Cloudinary.
@@ -494,7 +492,7 @@ async def upload_and_parse_resume(
     4. Auto-fills the employee's profile in the database.
     """
     # 1. Strict Validation for PDFs
-    if resume_file.content_type != "application/pdf" and not resume_file.filename.endswith(".pdf"):
+    if file.content_type != "application/pdf" and not file.filename.endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid file type. Only PDF resumes are accepted."
@@ -502,15 +500,16 @@ async def upload_and_parse_resume(
 
     # 2. Upload to Cloudinary
     try:
-        resume_url = await upload_file(resume_file, folder_name="candidate_resumes")
+        # Note: we pass "resumes" as the folder name
+        resume_url = await upload_file(file, folder_name="resumes")
         current_employee.resume_url = resume_url
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     # 3. Read bytes for PDF text extraction
     # CRITICAL: Reset the file pointer to the beginning because Cloudinary just read it!
-    await resume_file.seek(0)
-    file_bytes = await resume_file.read()
+    await file.seek(0)
+    file_bytes = await file.read()
 
     # 4. Extract Text from the PDF
     try:
@@ -521,11 +520,31 @@ async def upload_and_parse_resume(
     # 5. Ask the AI to parse the text into a structured dictionary
     parsed_data = await ResumeParserService.parse_resume_to_json(raw_text)
 
+
     # 6. Auto-Fill the Database Profile!
     if parsed_data.get("skills"):
-        existing_skills = set(current_employee.skills or [])
-        existing_skills.update(parsed_data["skills"])
-        current_employee.skills = list(existing_skills)
+        # Make sure the list exists
+        if current_employee.skills is None:
+            current_employee.skills = []
+            
+        # Extract just the string names of the skills we already have (converted to lowercase to avoid case-sensitive duplicates)
+        existing_skill_names = {
+            skill.name.lower() for skill in current_employee.skills if hasattr(skill, "name")
+        }
+        
+        for new_skill in parsed_data["skills"]:
+            # If the AI parser returned a list of strings (e.g., ["Python", "Java"])
+            if isinstance(new_skill, str):
+                if new_skill.lower() not in existing_skill_names:
+                    current_employee.skills.append(Skill(name=new_skill))
+                    existing_skill_names.add(new_skill.lower())
+                    
+            # If the AI parser returned a list of dictionaries (e.g., [{"name": "Python"}])
+            elif isinstance(new_skill, dict) and "name" in new_skill:
+                skill_name = new_skill["name"]
+                if skill_name.lower() not in existing_skill_names:
+                    current_employee.skills.append(Skill(**new_skill))
+                    existing_skill_names.add(skill_name.lower())
         
     if parsed_data.get("education_level"):
         current_employee.education_level = parsed_data["education_level"]
@@ -542,21 +561,6 @@ async def upload_and_parse_resume(
         for exp in parsed_data["work_experience"]:
             new_experiences.append(WorkExperienceInput(**exp))
         current_employee.work_experience = new_experiences
-
-    # 7. Save the fully updated profile to MongoDB
-    await current_employee.save()
-
-    return {
-        "status": "success",
-        "message": "Resume uploaded to Cloudinary and profile successfully auto-filled!",
-        "resume_url": resume_url,
-        "extracted_data": parsed_data,
-        "profile": {
-            "skills": current_employee.skills,
-            "experience": current_employee.experience_years,
-            "education": current_employee.education_level
-        }
-    }
 
 # --- Resume Download ---
 @router.get("/resume/download/{employee_id}")

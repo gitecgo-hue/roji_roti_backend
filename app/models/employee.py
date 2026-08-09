@@ -1,6 +1,6 @@
 from beanie import Document, Indexed, PydanticObjectId
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl, field_validator
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, date
 from enum import Enum
 
@@ -36,6 +36,7 @@ class Skill(BaseModel):
 
 class WorkExperience(BaseModel):
     company: str
+    job_title: str
     title: str
     start_date: date
     end_date: Optional[date] = None # null = present
@@ -113,6 +114,11 @@ class Employee(Document):
     work_experience: Optional[List[WorkExperience]] = []
     education: Optional[List[Education]] = []
     documents: Optional[List[ProfileDocument]] = []
+    education_level: Optional[str] = None
+    resume_url: Optional[str] = None
+    experience_years: Optional[Union[str, int]] = None
+    experience: Optional[Union[str, int]] = None 
+    languages: Optional[List[str]] = None
     
     # --- Preferences & Settings ---
     contact_visibility: ContactVisibility = ContactVisibility.RESTRICTED
