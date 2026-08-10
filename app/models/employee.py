@@ -5,7 +5,7 @@ from datetime import datetime, timezone, date
 from enum import Enum
 
 # =====================================================================
-# SUB-MODELS & ENUMS
+# SUB-MODELS & ENUMS (Database Structure)
 # =====================================================================
 
 class Role(str, Enum):
@@ -78,6 +78,48 @@ class ProfileMetadata(BaseModel):
     profile_completion: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# =====================================================================
+# API UPDATE SCHEMAS (Frontend Payloads)
+# =====================================================================
+
+class EducationUpdate(BaseModel):
+    education_level: Optional[str] = None
+    institute_school: Optional[str] = None
+    year: Optional[str] = None
+
+class WorkExperienceUpdate(BaseModel):
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    experience_years: Optional[int] = None
+    experience_months: Optional[int] = None
+    currently_working_here: Optional[bool] = None
+
+class EmployeeProfileUpdate(BaseModel):
+    # --- Basic Details ---
+    full_name: Optional[str] = None
+    job_title: Optional[str] = None
+    location: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    about_you: Optional[str] = None
+
+    # --- Preferences ---
+    salary_expectation: Optional[str] = None
+    notice_period_days: Optional[int] = None
+    preferred_job_types: Optional[List[str]] = None
+    preferred_locations: Optional[List[str]] = None
+    remote_work: Optional[bool] = None
+
+    # --- Skills & Languages ---
+    skills: Optional[List[str]] = None
+    languages: Optional[List[str]] = None
+
+    # --- Nested Lists ---
+    work_experience: Optional[List[WorkExperienceUpdate]] = None
+    education: Optional[List[EducationUpdate]] = None
+
 
 # =====================================================================
 # MAIN EMPLOYEE DOCUMENT

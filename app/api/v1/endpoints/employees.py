@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, s
 from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
 from typing import List, Optional
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from bson import ObjectId
 from beanie import PydanticObjectId
 import random
@@ -24,7 +24,6 @@ from app.api.dependencies import (
 # --- Schema Imports ---
 from app.schemas.employee import ( # There is a duplicate EmployeeProfileUpdate import
     EmployeeProfileUpdate,
-    EmployeeProfileUpdate,
     EmployeeResponse, 
     AvailabilityUpdate,
     EmployeeDashboardResponse,
@@ -37,13 +36,16 @@ from app.schemas.employer import CompanyProfilePublicResponse
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType
 from app.models.employee import (
+    EmployeeProfileUpdate,
     Employee,
     GeoLocation,
     Skill,
     WorkExperience,
     Education,
     SalaryExpectation,
-    ProfileDocument
+    ProfileDocument,
+    Availability,
+    Preferences
     )
 from app.models.application import JobApplication, ApplicationStatus
 from app.models.contact import ContactUnlock 
@@ -369,7 +371,7 @@ async def delete_employee_profile_picture(
     return {"message": "Profile picture deleted successfully."}
 
 # --- Profile Update ---
-@router.put("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
+@router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
     profile_data: EmployeeProfileUpdate,
     current_employee: Employee = Depends(get_current_employee)
@@ -377,57 +379,107 @@ async def update_employee_profile(
     """
     Updates the candidate's personal and professional details safely by 
     mapping flat frontend fields to rich database objects.
+    Accepts partial data, meaning the frontend only needs to send the fields that changed.
     """
+    # 1. Convert the incoming data to a dictionary, completely ignoring fields that weren't sent
     update_dict = profile_data.model_dump(exclude_unset=True)
     
-    # Handle Email Changes
+    # 2. If the frontend sent an empty request, return early
+    if not update_dict:
+        return {
+            "status": "success", 
+            "message": "No changes were provided.",
+            "updated_fields": []
+        }
+    
+    # 3. Handle Email Changes Specifically
     if update_dict.get("email") and update_dict["email"] != getattr(current_employee, "email", None):
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
-    # Map Direct/Simple Fields
-    direct_fields = ["name", "title", "location_name", "total_experience"]
-    for field in direct_fields:
-        if field in update_dict:
-            setattr(current_employee, field, update_dict[field])
+    # 4. Map Flat "Direct" Fields to their Database equivalents
+    field_mapping = {
+        "full_name": "name",
+        "job_title": "title",
+        "location": "location_name",
+        "about_you": "summary",
+        "phone": "phone",
+        "languages": "languages"
+    }
+    
+    for flat_field, db_field in field_mapping.items():
+        if flat_field in update_dict:
+            setattr(current_employee, db_field, update_dict[flat_field])
 
-    # --- EXPANDED SAFETY NET: Put object creation inside the try block ---
+    # 5. --- EXPANDED SAFETY NET: Put complex object creation inside the try block ---
     try:
-        # Map Complex Fields 
+        # --- Map Nested Availability & Preferences ---
+        if any(k in update_dict for k in ["notice_period_days"]):
+            if not current_employee.availability:
+                current_employee.availability = Availability()
+            if "notice_period_days" in update_dict:
+                current_employee.availability.notice_period_days = update_dict["notice_period_days"]
+
+        if any(k in update_dict for k in ["preferred_job_types", "preferred_locations", "remote_work"]):
+            if not current_employee.preferences:
+                current_employee.preferences = Preferences()
+            if "preferred_job_types" in update_dict:
+                current_employee.preferences.job_types = update_dict["preferred_job_types"]
+            if "preferred_locations" in update_dict:
+                current_employee.preferences.locations = update_dict["preferred_locations"]
+            if "remote_work" in update_dict:
+                current_employee.preferences.remote_ok = update_dict["remote_work"]
+
+        # Note: If handling 'salary_expectation', you'll need to extract the numbers 
+        # from the string (e.g. "₹25,000") to fit into your SalaryExpectation(min=float) model.
+
+        # --- Map Nested Lists (Skills, Education, Work Experience) ---
         if update_dict.get("skills"):
             current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
 
-        if update_dict.get("expected_salary"):
-            current_employee.salary_expectation = SalaryExpectation(
-                min=update_dict["expected_salary"],
-                max=update_dict["expected_salary"]
-            )
-
         if update_dict.get("education"):
-            current_employee.education = [Education(institution=update_dict["education"])]
+            new_education = []
+            for edu in update_dict["education"]:
+                new_education.append(
+                    Education(
+                        institution=edu.get("institute_school", "Not Specified"),
+                        degree=edu.get("education_level"),
+                        end_year=int(edu.get("year")) if edu.get("year", "").isdigit() else None
+                    )
+                )
+            current_employee.education = new_education
 
-        # If Swagger sends "string" here, the HttpUrl validation will safely trigger the except block!
-        if update_dict.get("resume_url"):
-            current_employee.documents = [ProfileDocument(type="resume", url=update_dict["resume_url"])]
+        if update_dict.get("work_experience"):
+            new_exp = []
+            for exp in update_dict["work_experience"]:
+                new_exp.append(
+                    WorkExperience(
+                        company=exp.get("company_name", "Not Specified"),
+                        job_title=exp.get("job_title", "Not Specified"),
+                        title=exp.get("job_role", "Not Specified"),
+                        # Your DB requires a start_date, so we generate a placeholder date if needed
+                        start_date=datetime.now(timezone.utc).date() 
+                    )
+                )
+            current_employee.work_experience = new_exp
             
-        # Safely save the mapped data
+        # 6. Safely save the mapped data to MongoDB
         await current_employee.save()
         
     except ValidationError as e:
-        # Now catches errors during BOTH object creation and database saving!
+        # Catches strict typing errors during object creation and saving
         raise HTTPException(
             status_code=422, 
-            detail=f"Data format error. Please check your inputs (like ensuring URLs are actually URLs): {e.errors()}"
+            detail=f"Data format error. Please check your inputs: {e.errors()}"
         )
     
     return {
-        "message": "Profile updated successfully",
-        "name": getattr(current_employee, "name", None),
-        "title": getattr(current_employee, "title", None),
+        "status": "success",
+        "message": "Profile updated successfully!",
+        "updated_fields": list(update_dict.keys()),
         "is_profile_complete": bool(
             getattr(current_employee, "name", None) and 
-            getattr(current_employee, "skills", None) and 
-            getattr(current_employee, "total_experience", None)
+            getattr(current_employee, "skills", None)
         )
     }
 
