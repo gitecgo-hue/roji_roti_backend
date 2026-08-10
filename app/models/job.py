@@ -1,9 +1,12 @@
 from beanie import Document, Indexed
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from enum import Enum
 import pymongo
+
+# --- Import Models ---
+from app.models.base import TranslatableDocument
 
 # --- ENUMS (Matches UI & System States) ---
 class JobStatus(str, Enum):
@@ -62,7 +65,7 @@ class GeoPoint(BaseModel):
     coordinates: List[float] # MUST be [longitude, latitude] in that order!
 
 # --- BEANIE DATABASE MODEL ---
-class Job(Document):
+class Job(TranslatableDocument):
     # --- Core Identifiers ---
     employer_id: Indexed(str)
     job_title: str = Field(..., min_length=3)
@@ -111,6 +114,8 @@ class Job(Document):
     views_count: int = 0
     shortlisted_count: int = 0
     hires_count: int = 0
+
+    translations: Optional[Dict[str, Dict[str, str]]] = {}
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 

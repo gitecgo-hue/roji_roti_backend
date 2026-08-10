@@ -168,3 +168,14 @@ async def get_any_current_user(user_info: dict = Depends(get_current_user)):
     user.role = user_info["user_type"]
     
     return user
+
+# --- LANGUAGE GUARD ---
+def get_user_language(accept_language: str = Header(default="en")) -> str:
+    """
+    Extracts the primary language code from the frontend's request header.
+    """
+    if not accept_language:
+        return "en"
+    
+    primary_lang = accept_language.split(",")[0].split("-")[0].lower()
+    return primary_lang

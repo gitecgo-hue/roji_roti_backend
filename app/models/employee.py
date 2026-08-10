@@ -1,8 +1,11 @@
 from beanie import Document, Indexed, PydanticObjectId
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl, field_validator
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Annotated
 from datetime import datetime, timezone, date
 from enum import Enum
+
+# --- Import Models ---
+from app.models.base import TranslatableDocument
 
 # =====================================================================
 # SUB-MODELS & ENUMS (Database Structure)
@@ -125,10 +128,10 @@ class EmployeeProfileUpdate(BaseModel):
 # MAIN EMPLOYEE DOCUMENT
 # =====================================================================
 
-class Employee(Document):
+class Employee(TranslatableDocument):
     # --- Core Identity ---
     role: Role = Role.EMPLOYEE
-    phone: Indexed(str, unique=True)
+    phone: str = Indexed(str, unique=True)
     phone_verified: bool = False
     
     # --- Names & Bio ---
@@ -205,7 +208,7 @@ class ApplicationStatus(str, Enum):
     HIRED = "hired"               # Officially hired for the role
     COMPLETED = "completed"       # Work finished; triggers rating/review flow
 
-class Application(Document):
+class Application(TranslatableDocument):
     job_id: PydanticObjectId
     employee_id: PydanticObjectId
     employer_id: Optional[PydanticObjectId] = None
