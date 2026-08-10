@@ -28,6 +28,7 @@ from app.utils.referral import generate_referral_code
 
 # --- Dependencies Imports ---
 from app.api.dependencies import get_any_current_user
+from app.api.dependencies import get_current_admin
 
 router = APIRouter()
 
@@ -298,26 +299,23 @@ async def logout(token: str = Depends(oauth2_scheme)):
 @router.post("/system/db-maintenance/fix-schema", status_code=status.HTTP_200_OK)
 async def fix_corrupted_schema(
     dry_run: bool = Query(False, description="If true, reports corruption without modifying the DB"),
-    current_user = Depends(get_any_current_user) 
+    current_admin = Depends(get_current_admin) 
 ):
     """
     DATABASE MAINTENANCE UTILITY (Enterprise Grade)
     -----------------------------------------------
-    Purpose: Recovers corrupted arrays and integers (saved as strings via Swagger/UI).
+    Purpose: Recovers corrupted arrays, integers, and malformed objects.
     
     Safety Measures:
     1. Admin-only access.
     2. Dry Run Support: Preview changes before committing them.
     3. Memory Protection: Processes backups in batches of 500.
-    4. Soft-recovers data by moving corrupted arrays to a 'legacy_{field}_text' field.
+    4. Soft-recovers data by moving corrupted arrays to legacy backup fields.
     """
     
-    # --- 1. LOCK IT DOWN (Security) ---
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
-            detail="Super Admin access is required to run database migrations."
-        )
+    # 1. LOCK IT DOWN (Security)
+    # The `get_current_admin` dependency inherently guarantees the user is a valid admin,
+    # so the manual role check has been safely removed.
 
     db = Employee.get_motor_collection().database
     employees_coll = db["employees"]
@@ -327,7 +325,7 @@ async def fix_corrupted_schema(
     total_modifications = 0
 
     # ========================================================
-    # PHASE 1: SWEEP AND RECOVER ARRAY FIELDS
+    # PHASE 1: SWEEP AND RECOVER ARRAY FIELDS (Saved as Strings)
     # ========================================================
     array_fields_to_check = [
         "education", 
@@ -345,7 +343,7 @@ async def fix_corrupted_schema(
         if dry_run:
             if corrupted_count > 0:
                 repair_results[field] = f"Found {corrupted_count} corrupted records (Dry run - no changes made)"
-            continue # Skip to the next field without making changes
+            continue 
 
         if corrupted_count > 0:
             # --- MEMORY PROTECTION: BATCH PROCESSING BACKUPS ---
@@ -360,12 +358,10 @@ async def fix_corrupted_schema(
                     "backed_up_at": datetime.now(timezone.utc)
                 })
                 
-                # Insert in chunks of 500 to save RAM
                 if len(batch) >= 500:
                     await backups_coll.insert_many(batch)
                     batch = []
                     
-            # Insert any remaining documents
             if batch:
                 await backups_coll.insert_many(batch)
 
@@ -402,7 +398,6 @@ async def fix_corrupted_schema(
             continue
 
         if corrupted_count > 0:
-            # Convert the string back to a proper integer using MongoDB aggregation
             fix_result = await employees_coll.update_many(
                 corrupted_query,
                 [{"$set": {field: {"$toInt": f"${field}"}}}]
@@ -411,6 +406,59 @@ async def fix_corrupted_schema(
             total_modifications += fix_result.modified_count
         else:
              repair_results[f"{field}_int_fix"] = 0
+
+    # ========================================================
+    # PHASE 3: SWEEP AND RECOVER MALFORMED ARRAY OBJECTS
+    # ========================================================
+    # Query: Find any document where the work_experience array has an item missing the 'company' field
+    malformed_we_query = {
+        "work_experience": {
+            "$elemMatch": {"company": {"$exists": False}}
+        }
+    }
+    malformed_we_count = await employees_coll.count_documents(malformed_we_query)
+
+    if dry_run:
+        if malformed_we_count > 0:
+            repair_results["malformed_work_experience"] = f"Found {malformed_we_count} corrupted records (Dry run - no changes made)"
+        else:
+            repair_results["malformed_work_experience"] = 0
+    elif malformed_we_count > 0:
+        # --- MEMORY PROTECTION: BATCH PROCESSING BACKUPS ---
+        cursor = employees_coll.find(malformed_we_query)
+        batch = []
+        
+        async for doc in cursor:
+            batch.append({
+                "original_employee_id": doc["_id"],
+                "corrupted_field": "work_experience (Missing company field)",
+                "corrupted_value": doc.get("work_experience"),
+                "backed_up_at": datetime.now(timezone.utc)
+            })
+            
+            if len(batch) >= 500:
+                await backups_coll.insert_many(batch)
+                batch = []
+                
+        if batch:
+            await backups_coll.insert_many(batch)
+
+        # --- SOFT RECOVERY (Rename & Reset) ---
+        fix_result = await employees_coll.update_many(
+            malformed_we_query,
+            [
+                {
+                    "$set": {
+                        "legacy_malformed_work_experience": "$work_experience",
+                        "work_experience": []
+                    }
+                }
+            ]
+        )
+        repair_results["malformed_work_experience"] = fix_result.modified_count
+        total_modifications += fix_result.modified_count
+    else:
+        repair_results["malformed_work_experience"] = 0
 
     # ========================================================
     # FINAL RESPONSE

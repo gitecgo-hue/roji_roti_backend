@@ -507,13 +507,21 @@ async def upload_and_parse_resume(
     if parsed_data.get("work_experience"):
         new_experiences = []
         for exp in parsed_data["work_experience"]:
-            new_experiences.append(WorkExperienceInput(**exp))
+            new_experiences.append(
+                WorkExperience(
+                    company=exp.get("company_name", "Not Specified"),
+                    job_title=exp.get("job_title", "Not Specified"),
+                    # The AI might not return a separate 'role/title', so we fallback to job_title
+                    title=exp.get("job_role", exp.get("job_title", "Not Specified")), 
+                    # The DB strictly requires a start_date, so we use a placeholder if the AI misses it
+                    start_date=date.today() 
+                )
+            )
         current_employee.work_experience = new_experiences
     
     await current_employee.save()
     
     return {"message": "Resume uploaded and data extracted successfully!"}
-
 # --- Resume Download ---
 @router.get("/resume/download/{employee_id}")
 async def download_employee_resume(
