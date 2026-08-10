@@ -77,6 +77,13 @@ from app.utils.translator import translate_document_fields
 router = APIRouter()
 
 # --- PYDANTIC SCHEMAS FOR PROFILE COMPLETION & UPDATES ---
+class SendUpdateOtpRequest(BaseModel):
+    new_phone: str
+
+class UpdatePhoneRequest(BaseModel):
+    new_phone: str = Field(..., description="The new 10-digit mobile number")
+    otp_code: str = Field(..., description="The 4-digit OTP sent to the NEW number") 
+
 class LocationInput(BaseModel):
     latitude: float
     longitude: float
@@ -85,10 +92,6 @@ class WorkExperienceInput(BaseModel):
     job_title: str
     company_name: Optional[str] = None
     duration_months: Optional[int] = None
-
-class UpdatePhoneRequest(BaseModel):
-    new_phone: str = Field(..., description="The new 10-digit mobile number")
-    otp_code: str = Field(..., description="The 6-digit OTP sent to the NEW number")
 
 # --- Employee Dashboard & Stats ---
 @router.get("/dashboard", response_model=EmployeeDashboardResponse)
@@ -365,32 +368,89 @@ async def delete_employee_profile_picture(current_employee = Depends(get_current
     return {"message": "Profile picture deleted successfully."}
 
 # --- Profile Updates ---
+# --- STEP 1: Request OTP for new phone number ---
+@router.post("/profile/send_phone_no_update_otp", status_code=status.HTTP_200_OK)
+async def send_phone_update_otp(
+    data: SendUpdateOtpRequest,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Generates and sends an OTP to the new phone number the user wants to switch to.
+    Checks if the number is available before sending.
+    """
+    clean_new_phone = data.new_phone[-10:]
+    
+    # 1. Check if the user is typing their current number
+    if current_employee.phone == clean_new_phone:
+        raise HTTPException(status_code=400, detail="This is already your current phone number.")
+    
+    # 2. Check if the new phone is already in use by someone else
+    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or await Employee.find_one({"phone": clean_new_phone})
+    if phone_taken:
+        raise HTTPException(status_code=409, detail="This phone number is already registered to another account.")
+
+    # 3. Generate a 4-digit OTP (Changed from 100000, 999999)
+    otp_code = str(random.randint(1000, 9999))
+    
+    # 4. Save it to the database
+    otp_record = await OTP.find_one({"phone": clean_new_phone})
+    if otp_record:
+        otp_record.code = otp_code
+        await otp_record.save()
+    else:
+        await OTP(phone=clean_new_phone, code=otp_code).insert()
+        
+    # 5. Send the SMS using your SMS service (Uncomment when ready)
+    # await SmsService.send_otp(clean_new_phone, otp_code)
+    
+    return {"status": "success", "message": "OTP sent to new phone number."}
+
+
+# --- STEP 2: Verify OTP and apply the update ---
 @router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
 async def update_employee_phone(
     data: UpdatePhoneRequest,
     current_employee: Employee = Depends(get_current_employee)
 ):
+    """
+    Verifies the 4-digit OTP sent to the new phone number. 
+    If successful, updates the database and issues a new JWT token.
+    """
     clean_new_phone = data.new_phone[-10:]
 
-    if current_employee.phone == clean_new_phone:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This is already your current phone number.")
-
-    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or await Employee.find_one({"phone": clean_new_phone})
-    
-    if phone_taken:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This phone number is already registered to another account.")
-
+    # 1. VERIFY THE OTP FIRST
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired OTP for the new phone number.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid or expired OTP for the new phone number."
+        )
+
+    # 2. Double-check if the new phone is already registered to someone else (Safety Net)
+    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or await Employee.find_one({"phone": clean_new_phone})
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number is already registered to another account."
+        )
     
+    # 3. Consume/Invalidate the OTP so it cannot be reused
     otp_record.code = None 
     await otp_record.save()
 
+    # 4. Apply the new phone number to the employee record
     current_employee.phone = clean_new_phone
     await current_employee.save()
 
-    return {"status": "success", "message": "Phone number successfully updated.", "new_phone": current_employee.phone}
+    # 5. Generate a fresh token with the new phone number
+    new_access_token = create_access_token(data={"sub": current_employee.phone})
+
+    return {
+        "status": "success", 
+        "message": "Phone number successfully updated.", 
+        "new_phone": current_employee.phone,
+        "access_token": new_access_token
+    }
 
 # --- Resume Upload & Parsing ---
 @router.post("/profile/upload_resume", status_code=status.HTTP_200_OK)
