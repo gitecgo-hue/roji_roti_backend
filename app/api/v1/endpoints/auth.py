@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Request, Depends
+from fastapi import APIRouter, HTTPException, status, Request, Depends, Query
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
@@ -25,6 +25,9 @@ from app.services.otp import OTPService
 
 # --- Utilities Imports ---
 from app.utils.referral import generate_referral_code
+
+# --- Dependencies Imports ---
+from app.api.dependencies import get_any_current_user
 
 router = APIRouter()
 
@@ -291,32 +294,135 @@ async def logout(token: str = Depends(oauth2_scheme)):
 
     return {"status": "success", "message": "Successfully logged out."}
 
-# --- fix DB Error ---
-@router.get("/fix-corrupted-db")
-async def fix_corrupted_employees():
+# --- DATABASE MAINTENANCE ENDPOINTS ---
+@router.post("/system/db-maintenance/fix-schema", status_code=status.HTTP_200_OK)
+async def fix_corrupted_schema(
+    dry_run: bool = Query(False, description="If true, reports corruption without modifying the DB"),
+    current_user = Depends(get_any_current_user) 
+):
     """
-    A temporary endpoint to fix corrupted database records where 
-    'education' or 'work_experience' were accidentally saved as strings.
+    DATABASE MAINTENANCE UTILITY (Enterprise Grade)
+    -----------------------------------------------
+    Purpose: Recovers corrupted arrays and integers (saved as strings via Swagger/UI).
+    
+    Safety Measures:
+    1. Admin-only access.
+    2. Dry Run Support: Preview changes before committing them.
+    3. Memory Protection: Processes backups in batches of 500.
+    4. Soft-recovers data by moving corrupted arrays to a 'legacy_{field}_text' field.
     """
-    # 1. Access the raw MongoDB collection directly, bypassing Pydantic
-    collection = Employee.get_motor_collection()
     
-    # 2. Find any user where 'education' is a string and reset it to an empty array
-    edu_fix = await collection.update_many(
-        {"education": {"$type": "string"}}, 
-        {"$set": {"education": []}}
-    )
-    
-    # 3. Let's fix 'work_experience' too, just in case Swagger UI messed that up as well!
-    work_fix = await collection.update_many(
-        {"work_experience": {"$type": "string"}}, 
-        {"$set": {"work_experience": []}}
-    )
+    # --- 1. LOCK IT DOWN (Security) ---
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Super Admin access is required to run database migrations."
+        )
 
+    db = Employee.get_motor_collection().database
+    employees_coll = db["employees"]
+    backups_coll = db["corrupted_employees_backup"]
+
+    repair_results = {}
+    total_modifications = 0
+
+    # ========================================================
+    # PHASE 1: SWEEP AND RECOVER ARRAY FIELDS
+    # ========================================================
+    array_fields_to_check = [
+        "education", 
+        "work_experience", 
+        "skills", 
+        "languages", 
+        "saved_job_ids"
+    ]
+
+    for field in array_fields_to_check:
+        corrupted_query = {field: {"$type": "string"}}
+        corrupted_count = await employees_coll.count_documents(corrupted_query)
+        
+        # --- DRY RUN CHECK ---
+        if dry_run:
+            if corrupted_count > 0:
+                repair_results[field] = f"Found {corrupted_count} corrupted records (Dry run - no changes made)"
+            continue # Skip to the next field without making changes
+
+        if corrupted_count > 0:
+            # --- MEMORY PROTECTION: BATCH PROCESSING BACKUPS ---
+            cursor = employees_coll.find(corrupted_query)
+            batch = []
+            
+            async for doc in cursor:
+                batch.append({
+                    "original_employee_id": doc["_id"],
+                    "corrupted_field": field,
+                    "corrupted_value": doc.get(field),
+                    "backed_up_at": datetime.now(timezone.utc)
+                })
+                
+                # Insert in chunks of 500 to save RAM
+                if len(batch) >= 500:
+                    await backups_coll.insert_many(batch)
+                    batch = []
+                    
+            # Insert any remaining documents
+            if batch:
+                await backups_coll.insert_many(batch)
+
+            # --- SOFT RECOVERY (Rename & Reset) ---
+            fix_result = await employees_coll.update_many(
+                corrupted_query,
+                [
+                    {
+                        "$set": {
+                            f"legacy_{field}_text": f"${field}", 
+                            field: [] 
+                        }
+                    }
+                ]
+            )
+            repair_results[field] = fix_result.modified_count
+            total_modifications += fix_result.modified_count
+        else:
+            repair_results[field] = 0
+
+    # ========================================================
+    # PHASE 2: SWEEP AND RECOVER INTEGER FIELDS
+    # ========================================================
+    integer_fields_to_check = ["age", "experience_years", "current_salary", "experience"]
+    
+    for field in integer_fields_to_check:
+        corrupted_query = {field: {"$type": "string"}}
+        corrupted_count = await employees_coll.count_documents(corrupted_query)
+        
+        # --- DRY RUN CHECK ---
+        if dry_run:
+            if corrupted_count > 0:
+                repair_results[f"{field}_int_fix"] = f"Found {corrupted_count} corrupted records (Dry run - no changes made)"
+            continue
+
+        if corrupted_count > 0:
+            # Convert the string back to a proper integer using MongoDB aggregation
+            fix_result = await employees_coll.update_many(
+                corrupted_query,
+                [{"$set": {field: {"$toInt": f"${field}"}}}]
+            )
+            repair_results[f"{field}_int_fix"] = fix_result.modified_count
+            total_modifications += fix_result.modified_count
+        else:
+             repair_results[f"{field}_int_fix"] = 0
+
+    # ========================================================
+    # FINAL RESPONSE
+    # ========================================================
+    mode = "DRY RUN MODE (No changes saved)" if dry_run else "LIVE MODE (Database Updated)"
+    
     return {
-        "message": "Database cleaned successfully!",
-        "corrupted_education_records_fixed": edu_fix.modified_count,
-        "corrupted_work_records_fixed": work_fix.modified_count
+        "status": "success",
+        "mode": mode,
+        "message": "Database sweep completed safely.",
+        "total_records_modified": total_modifications,
+        "fixes_applied": repair_results
     }
 
 # --- DELIVERY WEBHOOK ---
