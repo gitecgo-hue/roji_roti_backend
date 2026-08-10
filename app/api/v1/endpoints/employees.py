@@ -649,7 +649,7 @@ async def unsave_job(job_id: str, current_employee: Employee = Depends(get_curre
     return {"message": "Job was not in saved list", "saved": False}
 
 # --- to view the company profile ---
-@router.get("/companyprofile/{employer_id}", response_model=dict, status_code=status.HTTP_200_OK)
+@router.get("/company_profile/{employer_id}", response_model=dict, status_code=status.HTTP_200_OK)
 async def get_public_company_profile(
     employer_id: str,
     lang: str = Depends(get_user_language)
