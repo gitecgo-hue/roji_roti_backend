@@ -771,7 +771,13 @@ async def get_applied_jobs(
             
             # Localize database records securely
             loc_job = job.localize(lang_code=lang)
-            loc_employer = employer.localize(lang_code=lang) if employer else {}
+            if employer:
+                if hasattr(employer, "localize"):
+                    loc_employer = employer.localize(lang_code=lang)
+                else:
+                    loc_employer = employer.model_dump()
+            else:
+                loc_employer = {}
 
             applied_jobs_data.append({
                 "application_id": str(app.id),
