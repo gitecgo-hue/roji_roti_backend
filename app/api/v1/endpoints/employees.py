@@ -256,7 +256,7 @@ async def update_employee_profile(
                         Education(
                             institution=edu.get("institute_school", "Not Specified"),
                             degree=edu.get("education_level"),
-                            end_year=int(edu.get("year")) if edu.get("year", "").isdigit() else None
+                            end_year=int(edu.get("year")) if str(edu.get("year") or "").isdigit() else None
                         )
                     )
             current_employee.education = new_education
@@ -557,6 +557,7 @@ async def download_employee_resume(
     employee_id: str, 
     current_user = Depends(get_any_current_user)
 ):
+    # 1. Authorization and Quota Checks
     if current_user.role == "employee":
         if str(current_user.id) != employee_id:
             raise HTTPException(status_code=403, detail="You do not have permission to download this resume.")
@@ -565,21 +566,26 @@ async def download_employee_resume(
     else:
         raise HTTPException(status_code=403, detail="Unauthorized role.")
 
+    # 2. Fetch Employee
     employee = await Employee.get(ObjectId(employee_id))
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found.")
 
+    # 3. If they uploaded a custom resume, redirect them to the inline Cloudinary URL
     if getattr(employee, "resume_url", None):
         return RedirectResponse(url=employee.resume_url)
         
+    # 4. If no custom resume exists, generate one on the fly
     pdf_content = ResumeService.generate_pdf(employee)
     employee_name = getattr(employee, "name", "Candidate") or "Candidate"
     safe_name = "".join([c for c in employee_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
     
+    # 5. Return the dynamically generated PDF inline
     return Response(
         content=pdf_content.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}_Resume.pdf"'}
+        # CHANGED "attachment" to "inline" so it opens in the browser!
+        headers={"Content-Disposition": f'inline; filename="{safe_name}_Resume.pdf"'}
     )
 
 # --- Status & Visibility ---

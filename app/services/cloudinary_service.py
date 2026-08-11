@@ -17,25 +17,22 @@ cloudinary.config(
 async def upload_file(file: UploadFile, folder_name: str = "general") -> str:
     """
     Reads an uploaded file and sends it to Cloudinary.
-    Dynamically handles both images (JPG, PNG) and raw documents (PDF).
+    Uses resource_type="auto" so PDFs and images can be viewed inline in the browser
+    instead of being forced as a download.
     """
     try:
         file_content = await file.read()
         
-        # Determine the correct Cloudinary resource_type
-        # PDFs must be uploaded as "raw"
-        if file.content_type == "application/pdf":
-            r_type = "raw"
-        elif file.content_type.startswith("image/"):
-            r_type = "image"
-        else:
+        # Basic validation to ensure we only process supported types
+        if file.content_type != "application/pdf" and not file.content_type.startswith("image/"):
             raise ValueError(f"Unsupported file type: {file.content_type}")
 
-        # Upload to Cloudinary with the specific resource_type
+        # Upload to Cloudinary with resource_type="auto"
+        # This is the magic fix that stops Cloudinary from treating PDFs as zip/raw downloads
         upload_result = cloudinary.uploader.upload(
             file_content,
             folder=folder_name,
-            resource_type=r_type
+            resource_type="auto"
         )
         
         return upload_result.get("secure_url")

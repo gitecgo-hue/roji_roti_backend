@@ -4,33 +4,12 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from beanie import PydanticObjectId
 
-# --- Main Profile Completion Request ---
-class CompleteEmployeeProfileRequest(BaseModel):
-    # 1. Header / Category Details (Looking for jobs in...)
-    preferred_roles: Optional[List[str]] = Field(default=[], description="List of job roles they want")
-    
-    # 2. Basic Details
-    current_salary: Optional[str] = Field(None, description="E.g., '14800 per month'")
-    email: Optional[EmailStr] = None
-    age: Optional[int] = None
-    gender: Optional[str] = Field(None, description="Male, Female, Other")
-    languages: Optional[List[str]] = Field(default=[], description="E.g., ['English', 'Hindi']")
-    education_level: Optional[str] = Field(None, description="E.g., 'Graduate', '12th Pass'")
-    
-    # 3. Professional Details
-    skills: Optional[List[SkillInput]] = []
-    work_experience: Optional[List[WorkExperienceInput]] = []
-    
-    # 4. Location (Usually required for the map matching)
-    location_name: Optional[str] = None
-
 # --- Employee Profile Update Schemas ---
 class EmployeeProfileUpdate(BaseModel):
     """Unified schema for updating the employee's full profile"""
     
     # --- Personal Details ---
     name: Optional[str] = None
-    email: Optional[EmailStr] = None
     location_name: Optional[str] = None 
     
     # --- Professional Details ---

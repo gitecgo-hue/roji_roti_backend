@@ -27,7 +27,7 @@ class AdminStatus(str, Enum):
 
 class GeoLocation(BaseModel):
     type: str = "Point"
-    coordinates: List[float]  # [longitude, latitude]
+    coordinates: List[float]
     city: Optional[str] = None
     state: Optional[str] = None
     country: Optional[str] = None
@@ -42,7 +42,7 @@ class WorkExperience(BaseModel):
     job_title: str
     title: str
     start_date: date
-    end_date: Optional[date] = None # null = present
+    end_date: Optional[date] = None 
     description: Optional[str] = None
     location: Optional[GeoLocation] = None
 
@@ -104,8 +104,6 @@ class EmployeeProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     job_title: Optional[str] = None
     location: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
     about_you: Optional[str] = None
 
     # --- Preferences ---
