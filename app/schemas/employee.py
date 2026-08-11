@@ -99,9 +99,6 @@ class EmployeeResponse(BaseModel):
     
     # Names & Bio
     name: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    display_name: Optional[str] = None
     summary: Optional[str] = None
     email: Optional[EmailStr] = None
     avatar: Optional[str] = None

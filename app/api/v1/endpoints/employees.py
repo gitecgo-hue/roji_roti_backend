@@ -328,25 +328,38 @@ async def update_profile_photo(
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Uploads a profile picture to Cloudinary and updates the employee's record.
+    Uploads a profile picture to Cloudinary, updates the employee's record,
+    and returns the URL for the frontend to display.
     """
     allowed_types = ["image/jpeg", "image/png", "image/webp"]
     if file.content_type not in allowed_types:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file type. Only JPG, PNG, and WEBP are allowed.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid file type. Only JPG, PNG, and WEBP are allowed."
+        )
         
     file.file.seek(0, 2) 
     file_size = file.file.tell() 
     file.file.seek(0) 
     
     if file_size > 5 * 1024 * 1024:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File size too large. Maximum size is 5MB.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="File size too large. Maximum size is 5MB."
+        )
 
     try:
         url = await upload_file(file, folder_name="employees")
-        current_employee.photo_url = url
+        
+        # Standardized to 'profile_picture_url' to match the delete endpoint
+        current_employee.profile_picture_url = url
         await current_employee.save()
         
-        return {"message": "Profile photo updated successfully", "photo_url": url}
+        # Now returns the URL directly to the frontend
+        return {
+            "message": "Profile photo updated successfully", 
+            "profile_picture_url": url
+        }
         
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -458,10 +471,18 @@ async def upload_and_parse_resume(
     file: UploadFile = File(...),
     current_employee = Depends(get_current_employee) 
 ):
+    """
+    Uploads the resume to Cloudinary, stores the URL, parses the data,
+    and returns the URL to the frontend.
+    """
     if file.content_type != "application/pdf" and not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file type. Only PDF resumes are accepted.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Invalid file type. Only PDF resumes are accepted."
+        )
 
     try:
+        # Upload to Cloudinary and store the URL in the database
         resume_url = await upload_file(file, folder_name="resumes")
         current_employee.resume_url = resume_url
     except ValueError as e:
@@ -477,6 +498,7 @@ async def upload_and_parse_resume(
 
     parsed_data = await ResumeParserService.parse_resume_to_json(raw_text)
 
+    # --- Database Auto-Fill Logic ---
     if parsed_data.get("skills"):
         if current_employee.skills is None:
             current_employee.skills = []
@@ -504,6 +526,7 @@ async def upload_and_parse_resume(
     if parsed_data.get("languages"):
         current_employee.languages = parsed_data["languages"]
 
+    # Uses the safely mapped fallback logic we implemented earlier
     if parsed_data.get("work_experience"):
         new_experiences = []
         for exp in parsed_data["work_experience"]:
@@ -519,9 +542,15 @@ async def upload_and_parse_resume(
             )
         current_employee.work_experience = new_experiences
     
+    # Save everything, including the new resume_url
     await current_employee.save()
     
-    return {"message": "Resume uploaded and data extracted successfully!"}
+    # Return the resume URL alongside the success message
+    return {
+        "message": "Resume uploaded and data extracted successfully!",
+        "resume_url": resume_url
+    }
+
 # --- Resume Download ---
 @router.get("/resume/download/{employee_id}")
 async def download_employee_resume(

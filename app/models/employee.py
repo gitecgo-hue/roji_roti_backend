@@ -137,9 +137,6 @@ class Employee(TranslatableDocument):
     # --- Names & Bio ---
     title: Optional[str] = None
     name: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    display_name: Optional[str] = None
     summary: Optional[str] = None
     email: Optional[EmailStr] = None
     email_verified: bool = False
