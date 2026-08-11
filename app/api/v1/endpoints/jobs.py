@@ -232,23 +232,30 @@ async def get_smart_job_recommendations(
             fallback_query["job_category"] = job_category
             
         if location_name:
+            # SCENARIO A: They provided a city name, but no GPS coords
             loc_regex = re.compile(f"{re.escape(location_name)}", re.IGNORECASE)
             fallback_query["$or"] = [
                 {"job_city": loc_regex},
                 {"location_name": loc_regex}
             ]
+            
+            fallback_jobs = await Job.find(fallback_query).sort("-created_at").limit(20).to_list()
+
+            feed_items["radius_searched_km"] = "N/A (Text Match)"
+            feed_items["matches_found"] = len(fallback_jobs)
+            feed_items["recommended_jobs"] = [job.localize(lang_code=lang) for job in fallback_jobs]
+            
         else:
-            feed_items["radius_searched_km"] = "No location provided"
-            feed_items["matches_found"] = 0
-            feed_items["recommended_jobs"] = []
-            return feed_items
-
-        fallback_jobs = await Job.find(fallback_query).sort("-created_at").limit(20).to_list()
-
-        feed_items["radius_searched_km"] = "N/A (Text Match)"
-        feed_items["matches_found"] = len(fallback_jobs)
-        # Apply translation
-        feed_items["recommended_jobs"] = [job.localize(lang_code=lang) for job in fallback_jobs]
+            # SCENARIO B: No location provided at all. Fetch top 10 newest jobs!
+            # Removed the pan_india restriction so they get the absolute newest across the platform
+            fallback_query.pop("is_pan_india", None)
+            
+            # Sort by descending creation date and limit to 10
+            newest_jobs = await Job.find(fallback_query).sort("-created_at").limit(10).to_list()
+            
+            feed_items["radius_searched_km"] = "No location (Showing Top 10 Newest)"
+            feed_items["matches_found"] = len(newest_jobs)
+            feed_items["recommended_jobs"] = [job.localize(lang_code=lang) for job in newest_jobs]
 
     return feed_items
 
