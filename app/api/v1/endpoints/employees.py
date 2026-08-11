@@ -812,7 +812,13 @@ async def get_saved_jobs(
             
             # Localize database records
             loc_job = job.localize(lang_code=lang)
-            loc_employer = employer.localize(lang_code=lang) if employer else {}
+            if employer:
+                if hasattr(employer, "localize"):
+                    loc_employer = employer.localize(lang_code=lang)
+                else:
+                    loc_employer = employer.model_dump()
+            else:
+                loc_employer = {}
 
             salary_str = "Not specified"
             if job.min_fixed_salary and job.max_fixed_salary:
