@@ -21,7 +21,7 @@ class EmployeeProfileUpdate(BaseModel):
     title: Optional[str] = None 
     skills: Optional[List[str]] = None
     total_experience: Optional[float] = None 
-    expected_salary: Optional[SalaryExpectation] = None
+    expected_salary: Optional[float] = None
     education: Optional[str] = None 
     resume_url: Optional[str] = None
 
@@ -67,7 +67,7 @@ class EmployeeCreate(BaseModel):
     languages: List[str] = Field(default=["Hindi"], description="Supported languages")
     
     # Integrated expected_salary as str for maximum flexibility
-    expected_salary: Optional[SalaryExpectation] = Field(None, description="Employee's salary expectation")
+    expected_salary: Optional[float] = Field(None, description="Employee's salary expectation")
     gender: Optional[str] = Field(None, description="Gender selection")
     email: Optional[EmailStr] = Field(None, description="Optional email address")
     
@@ -97,7 +97,7 @@ class EmployeeResponse(BaseModel):
     
     # Preferences & Settings
     contact_visibility: Optional[str] = None
-    salary_expectation: Optional[dict] = None
+    expected_salary: Optional[dict] = None
     availability: Optional[dict] = None
     preferences: Optional[dict] = None
     social_links: Optional[dict] = None
@@ -127,11 +127,12 @@ class EmployeeDashboardResponse(BaseModel):
 
 # --- Employee Work Experience & Skills Input Schemas ---
 class WorkExperienceInput(BaseModel):
-    company: str = Field(..., description="Name of the company")
-    title: str = Field(..., description="Job title or role")
-    start_date: date = Field(..., description="Format: YYYY-MM-DD")
-    end_date: Optional[date] = Field(None, description="Format: YYYY-MM-DD. Null means currently working here.")
-    description: Optional[str] = None
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    currently_working_here: Optional[bool] = None
 
 class SkillInput(BaseModel):
     name: str
@@ -153,5 +154,5 @@ class SavedJobResponse(BaseModel):
     job_title: Optional[str] = None
     company_name: Optional[str] = None
     location: Optional[str] = None
-    expected_salary: Optional[str] = None
+    expected_salary: Optional[float] = None
     created_at: Optional[datetime] = None

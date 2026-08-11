@@ -254,37 +254,28 @@ async def update_employee_profile(
     # ==========================================
     try:
         # --- Availability & Preferences ---
-        if any(k in update_dict for k in ["notice_period_days"]):
-            if not current_employee.availability:
-                current_employee.availability = Availability()
-            if "notice_period_days" in update_dict:
-                current_employee.availability.notice_period_days = update_dict["notice_period_days"]
-
         pref_keys = ["preferred_job_types", "category", "preferred_roles", "preferred_locations", "remote_work"]
         if any(k in update_dict for k in pref_keys):
             if not current_employee.preferences:
                 current_employee.preferences = Preferences()
             
-            # Start with existing job types
             job_types = set(current_employee.preferences.job_types or [])
             
-            # FIXED: If the frontend sends a new list, OVERWRITE the old one (allows deleting tags)
-            if "preferred_job_types" in update_dict:
+            # FIXED: Safely check if preferred_job_types exists and is not None
+            if update_dict.get("preferred_job_types"):
                 job_types = set(update_dict["preferred_job_types"])
                 
-            # Add category or roles if provided
             if update_dict.get("category"):
                 job_types.add(update_dict["category"])
             if update_dict.get("preferred_roles"):
                 job_types.update(update_dict["preferred_roles"])
             
-            # FIXED: Save the list, but explicitly filter out empty values and Swagger's "string"
+            # Filter out empty values and Swagger's dummy "string"
             current_employee.preferences.job_types = [
                 jt for jt in list(job_types) if jt and jt.lower() != "string"
             ]
 
-            # FIXED: Apply the same "string" filter to locations
-            if "preferred_locations" in update_dict:
+            if "preferred_locations" in update_dict and update_dict["preferred_locations"]:
                 current_employee.preferences.locations = [
                     loc for loc in update_dict["preferred_locations"] 
                     if loc and loc.lower() != "string"
@@ -293,11 +284,9 @@ async def update_employee_profile(
             if "remote_work" in update_dict:
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
-        # --- Salary Expectations ---
-        frontend_salary_key = "salary_expectation"
-        
-        if frontend_salary_key in update_dict:
-            parsed_amount = parse_salary_string(update_dict[frontend_salary_key])
+        # --- Salary Expectations ---        
+        if "salary_expectation" in update_dict:
+            parsed_amount = parse_salary_string(update_dict["salary_expectation"])
             if parsed_amount is not None:
                 current_employee.expected_salary = parsed_amount
 

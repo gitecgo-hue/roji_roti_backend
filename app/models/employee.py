@@ -39,8 +39,8 @@ class WorkExperience(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    experience_years: Optional[int] = None
-    experience_months: Optional[int] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
     currently_working_here: Optional[bool] = None
 
 class Education(BaseModel):
@@ -88,7 +88,7 @@ class EmployeeProfileUpdate(BaseModel):
     about_you: Optional[str] = None
 
     # --- Preferences ---
-    salary_expectation: Optional[SalaryExpectation] = None
+    expected_salary: Optional[float] = None
     notice_period_days: Optional[int] = None
     preferred_job_types: Optional[List[str]] = None
     preferred_locations: Optional[List[str]] = None
@@ -103,16 +103,17 @@ class EmployeeProfileUpdate(BaseModel):
     education: Optional[List[EducationUpdate]] = None
 
 class EducationUpdate(BaseModel):
-    education_level: Optional[str] = None
-    institute_school: Optional[str] = None
-    year: Optional[str] = None
+    institute: Optional[str] = None
+    field_of_study: Optional[str] = None
+    start_year: Optional[str] = None
+    end_year: Optional[str] = None
 
 class WorkExperienceUpdate(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    experience_years: Optional[int] = None
-    experience_months: Optional[int] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
     currently_working_here: Optional[bool] = None
 
 # =====================================================================
@@ -142,7 +143,6 @@ class Employee(TranslatableDocument):
     saved_job_ids: List[str] = Field(default_factory=list)
     
     # --- Professional Details ---
-    job_category: Optional[str] = None
     skills: Optional[List[Skill]] = Field(default_factory=list)
     work_experience: Optional[List[WorkExperience]] = Field(default_factory=list)
     education: Optional[List[Education]] = Field(default_factory=list)
@@ -151,7 +151,7 @@ class Employee(TranslatableDocument):
     
     # --- Preferences & Settings ---
     contact_visibility: ContactVisibility = ContactVisibility.RESTRICTED
-    salary_expectation: Optional[SalaryExpectation] = None
+    expected_salary: Optional[float] = None
     availability: Optional[Availability] = Field(default_factory=Availability)
     preferences: Optional[Preferences] = Field(default_factory=Preferences)
     social_links: Optional[SocialLinks] = Field(default_factory=SocialLinks)
