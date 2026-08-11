@@ -34,17 +34,14 @@ class GeoLocation(BaseModel):
 
 class Skill(BaseModel):
     name: str
-    level: Optional[str] = Field(None, description="beginner, intermediate, expert")
-    years: Optional[float] = None
 
 class WorkExperience(BaseModel):
-    company: str
-    job_title: str
-    title: str
-    start_date: date
-    end_date: Optional[date] = None 
-    description: Optional[str] = None
-    location: Optional[GeoLocation] = None
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    experience_years: Optional[int] = None
+    experience_months: Optional[int] = None
+    currently_working_here: Optional[bool] = None
 
 class Education(BaseModel):
     institution: str
@@ -73,8 +70,8 @@ class SocialLinks(BaseModel):
     website: Optional[HttpUrl] = None
 
 class Preferences(BaseModel):
-    job_types: Optional[List[str]] = []
-    locations: Optional[List[str]] = []
+    job_types: Optional[List[str]] = Field(default_factory=list)
+    locations: Optional[List[str]] = Field(default_factory=list)
     remote_ok: Optional[bool] = False
 
 class ProfileMetadata(BaseModel):
@@ -85,20 +82,6 @@ class ProfileMetadata(BaseModel):
 # =====================================================================
 # API UPDATE SCHEMAS (Frontend Payloads)
 # =====================================================================
-
-class EducationUpdate(BaseModel):
-    education_level: Optional[str] = None
-    institute_school: Optional[str] = None
-    year: Optional[str] = None
-
-class WorkExperienceUpdate(BaseModel):
-    job_title: Optional[str] = None
-    job_role: Optional[str] = None
-    company_name: Optional[str] = None
-    experience_years: Optional[int] = None
-    experience_months: Optional[int] = None
-    currently_working_here: Optional[bool] = None
-
 class EmployeeProfileUpdate(BaseModel):
     # --- Basic Details ---
     full_name: Optional[str] = None
@@ -107,7 +90,7 @@ class EmployeeProfileUpdate(BaseModel):
     about_you: Optional[str] = None
 
     # --- Preferences ---
-    salary_expectation: Optional[str] = None
+    salary_expectation: Optional[SalaryExpectation] = None
     notice_period_days: Optional[int] = None
     preferred_job_types: Optional[List[str]] = None
     preferred_locations: Optional[List[str]] = None
@@ -121,6 +104,18 @@ class EmployeeProfileUpdate(BaseModel):
     work_experience: Optional[List[WorkExperienceUpdate]] = None
     education: Optional[List[EducationUpdate]] = None
 
+class EducationUpdate(BaseModel):
+    education_level: Optional[str] = None
+    institute_school: Optional[str] = None
+    year: Optional[str] = None
+
+class WorkExperienceUpdate(BaseModel):
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    experience_years: Optional[int] = None
+    experience_months: Optional[int] = None
+    currently_working_here: Optional[bool] = None
 
 # =====================================================================
 # MAIN EMPLOYEE DOCUMENT
@@ -150,14 +145,10 @@ class Employee(TranslatableDocument):
     
     # --- Professional Details ---
     job_category: Optional[str] = None
-    skills: Optional[List[Skill]] = []
-    work_experience: Optional[List[WorkExperience]] = []
-    education: Optional[List[Education]] = []
-    documents: Optional[List[ProfileDocument]] = []
-    education_level: Optional[str] = None
+    skills: Optional[List[Skill]] = Field(default_factory=list)
+    work_experience: Optional[List[WorkExperience]] = Field(default_factory=list)
+    education: Optional[List[Education]] = Field(default_factory=list)
     resume_url: Optional[str] = None
-    experience_years: Optional[Union[str, int]] = None
-    experience: Optional[Union[str, int]] = None 
     languages: Optional[List[str]] = None
     
     # --- Preferences & Settings ---

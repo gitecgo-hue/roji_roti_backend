@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response, BackgroundTasks
 from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, date, timezone
 from bson import ObjectId
 from beanie import PydanticObjectId
@@ -46,7 +46,8 @@ from app.models.employee import (
     SalaryExpectation,
     ProfileDocument,
     Availability,
-    Preferences
+    Preferences,
+    ProfileMetadata
 )
 from app.models.application import JobApplication, ApplicationStatus
 from app.models.contact import ContactUnlock 
@@ -142,6 +143,49 @@ async def read_employee_profile(
     employee_data["id"] = str(current_employee.id)
     return employee_data
 
+# --- Helper Function to Parse Salary Strings ---
+def parse_salary_string(salary_input: Union[str, Dict[str, Any], Any]) -> SalaryExpectation:
+    """
+    Safely parses salary expectations whether the frontend sends a raw string ('50k')
+    or a JSON dictionary ({"min": 50000, "max": 60000}).
+    """
+    if not salary_input:
+        return SalaryExpectation()
+
+    # SCENARIO A: The frontend sent a dictionary (JSON object)
+    if isinstance(salary_input, dict):
+        return SalaryExpectation(
+            min=salary_input.get("min"),
+            max=salary_input.get("max"),
+            currency=salary_input.get("currency", "INR")
+        )
+
+    # SCENARIO B: The frontend sent a raw string
+    if isinstance(salary_input, str):
+        clean_str = salary_input.replace(",", "").replace(" ", "").lower()
+        if "k" in clean_str:
+            clean_str = clean_str.replace("k", "000")
+        
+        numbers = re.findall(r'\d+', clean_str)
+        
+        if not numbers:
+            return SalaryExpectation()
+            
+        if len(numbers) == 1:
+            return SalaryExpectation(min=float(numbers[0]), max=None)
+            
+        min_val = float(numbers[0])
+        max_val = float(numbers[1])
+        
+        # Swap them if the user accidentally typed "60000-50000"
+        if min_val > max_val:
+            min_val, max_val = max_val, min_val
+            
+        return SalaryExpectation(min=min_val, max=max_val)
+
+    # Fallback for unexpected data types
+    return SalaryExpectation()
+
 #--- Profile Update ---
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
@@ -165,22 +209,32 @@ async def update_employee_profile(
         }
 
     # ==========================================
-    # 2. OLA MAPS AUTO-GEOCODING
+    # 2. OLA MAPS AUTO-GEOCODING & LOCATION
     # ==========================================
-    if "location_name" in update_dict and not update_dict.get("location"):
-        coords = await MapService.get_coordinates(update_dict["location_name"])
-        if coords:
-            current_employee.location = GeoLocation(
-                type="Point",
-                coordinates=[coords["longitude"], coords["latitude"]],
-                city=update_dict["location_name"]
-            )
-            update_dict["location_name"] = coords.get("formatted_address", update_dict["location_name"])
-        else:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Could not find coordinates for '{update_dict['location_name']}'. Please try a more specific area."
-            )
+    # The frontend payload sends the city string as "location"
+    if "location" in update_dict and isinstance(update_dict["location"], str):
+        city_name = update_dict["location"]
+        
+        try:
+            # Try to get coordinates for the rich GeoLocation object
+            coords = await MapService.get_coordinates(city_name)
+            if coords:
+                current_employee.location = GeoLocation(
+                    type="Point",
+                    coordinates=[coords["longitude"], coords["latitude"]],
+                    city=city_name
+                )
+                # Save the formatted address or fallback to the typed name
+                current_employee.location_name = coords.get("formatted_address", city_name)
+            else:
+                # Fallback if map service returns nothing
+                current_employee.location_name = city_name
+        except Exception:
+            # Fallback if map service is down
+            current_employee.location_name = city_name
+            
+        # Remove 'location' from update_dict so the basic field mapper below doesn't get confused
+        del update_dict["location"]
 
     # ==========================================
     # 3. DIRECT FIELD MAPPING
@@ -192,14 +246,15 @@ async def update_employee_profile(
     field_mapping = {
         "full_name": "name",
         "job_title": "title",
-        "location_name": "location_name",
         "about_you": "summary",
         "phone": "phone",
         "languages": "languages",
         "current_salary": "current_salary",
         "age": "age",
         "gender": "gender",
-        "referred_by_id": "referred_by_id"
+        "referred_by_id": "referred_by_id",
+        "experience_years": "experience_years",
+        "total_experience": "total_experience"
     }
     
     for flat_field, db_field in field_mapping.items():
@@ -222,33 +277,44 @@ async def update_employee_profile(
             if not current_employee.preferences:
                 current_employee.preferences = Preferences()
             
+            # Start with existing job types
             job_types = set(current_employee.preferences.job_types or [])
-            if update_dict.get("preferred_job_types"):
-                job_types.update(update_dict["preferred_job_types"])
+            
+            # FIXED: If the frontend sends a new list, OVERWRITE the old one (allows deleting tags)
+            if "preferred_job_types" in update_dict:
+                job_types = set(update_dict["preferred_job_types"])
+                
+            # Add category or roles if provided
             if update_dict.get("category"):
                 job_types.add(update_dict["category"])
             if update_dict.get("preferred_roles"):
                 job_types.update(update_dict["preferred_roles"])
             
-            current_employee.preferences.job_types = list(job_types)
+            # FIXED: Save the list, but explicitly filter out empty values and Swagger's "string"
+            current_employee.preferences.job_types = [
+                jt for jt in list(job_types) if jt and jt.lower() != "string"
+            ]
 
+            # FIXED: Apply the same "string" filter to locations
             if "preferred_locations" in update_dict:
-                current_employee.preferences.locations = update_dict["preferred_locations"]
+                current_employee.preferences.locations = [
+                    loc for loc in update_dict["preferred_locations"] 
+                    if loc and loc.lower() != "string"
+                ]
+                
             if "remote_work" in update_dict:
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
         # --- Salary Expectations ---
-        if update_dict.get("expected_salary"):
-            current_employee.salary_expectation = SalaryExpectation(
-                min=update_dict["expected_salary"],
-                max=update_dict["expected_salary"]
-            )
+        if update_dict.get("salary_expectation"):
+            current_employee.salary_expectation = parse_salary_string(update_dict["salary_expectation"])
 
         # --- Arrays (Skills, Education, Work Experience) ---
         if update_dict.get("skills"):
             current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
 
-        if update_dict.get("education"):
+        # FIXED: Overwrite the education array completely instead of appending
+        if "education" in update_dict:
             new_education = []
             for edu in update_dict["education"]:
                 if isinstance(edu, dict):
@@ -260,24 +326,43 @@ async def update_employee_profile(
                         )
                     )
             current_employee.education = new_education
-        elif update_dict.get("education_level"):
-            if not current_employee.education:
-                current_employee.education = []
-            current_employee.education.append(Education(institution="Not Specified", degree=update_dict["education_level"]))
+            
+        # FIXED: Only update the top-level education string, don't blindly append to the array!
+        if update_dict.get("education_level"):
+            current_employee.education_level = update_dict["education_level"]
+            if current_employee.education and len(current_employee.education) > 0:
+                current_employee.education[0].degree = update_dict["education_level"]
+            else:
+                current_employee.education = [Education(institution="Not Specified", degree=update_dict["education_level"])]
 
-        if update_dict.get("work_experience"):
+        # FIXED: Matched exact DB schema keys (company_name, job_title) so they don't save as null
+        if "work_experience" in update_dict:
             new_exp = []
             for exp in update_dict["work_experience"]:
                 if isinstance(exp, dict):
                     new_exp.append(
                         WorkExperience(
-                            company=exp.get("company_name", "Not Specified"),
-                            job_title=exp.get("job_title", "Not Specified"),
-                            title=exp.get("job_role", "Not Specified"),
-                            start_date=date.today() 
+                            job_title=exp.get("job_title"),
+                            job_role=exp.get("job_role"),
+                            company_name=exp.get("company_name"),
+                            experience_years=exp.get("experience_years"),
+                            experience_months=exp.get("experience_months"),
+                            currently_working_here=exp.get("currently_working_here")
                         )
                     )
             current_employee.work_experience = new_exp
+            
+        # ==========================================
+        # 5. METADATA & SAVING
+        # ==========================================
+        # Force the updated_at timestamp to refresh right before saving
+        if not current_employee.metadata:
+            current_employee.metadata = ProfileMetadata()
+        current_employee.metadata.updated_at = datetime.now(timezone.utc)
+        
+        # Calculate Profile Completion %
+        if getattr(current_employee, "name", None) and getattr(current_employee, "skills", None):
+            current_employee.metadata.profile_completion = 100
             
         await current_employee.save()
         
@@ -285,7 +370,7 @@ async def update_employee_profile(
         raise HTTPException(status_code=422, detail=f"Data format error. Please check your inputs: {e.errors()}")
 
     # ==========================================
-    # 5. TRANSLATION & WEBHOOK TRIGGERS
+    # 6. TRANSLATION & WEBHOOK TRIGGERS
     # ==========================================
     # Check if translatable text fields were modified
     translatable_db_fields = ["name", "title", "summary"]

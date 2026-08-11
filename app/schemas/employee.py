@@ -4,6 +4,14 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from beanie import PydanticObjectId
 
+
+# --- Salary Expectation Schema ---
+class SalaryExpectation(BaseModel):
+    """Structured salary expectation to allow ranges and periods."""
+    min_salary: Optional[float] = Field(None, description="Minimum expected salary")
+    max_salary: Optional[float] = Field(None, description="Maximum expected salary")
+    period: Optional[str] = Field(None, description="Salary period (e.g., monthly, daily)")
+
 # --- Employee Profile Update Schemas ---
 class EmployeeProfileUpdate(BaseModel):
     """Unified schema for updating the employee's full profile"""
@@ -16,7 +24,7 @@ class EmployeeProfileUpdate(BaseModel):
     title: Optional[str] = None 
     skills: Optional[List[str]] = None
     total_experience: Optional[float] = None 
-    expected_salary: Optional[float] = None
+    expected_salary: Optional[SalaryExpectation] = None
     education: Optional[str] = None 
     resume_url: Optional[str] = None
 
@@ -58,11 +66,11 @@ class EmployeeCreate(BaseModel):
     preferred_locations: List[str] = Field(default=[], description="Multiple locations selection")
     
     # Profile details
-    experience: int = Field(default=0, ge=0, description="Years of experience")
+    work_experience: int = Field(default=0, ge=0, description="Years of experience")
     languages: List[str] = Field(default=["Hindi"], description="Supported languages")
     
     # Integrated expected_salary as str for maximum flexibility
-    expected_salary: Optional[str] = Field(None, description="Employee's salary expectation")
+    expected_salary: Optional[SalaryExpectation] = Field(None, description="Employee's salary expectation")
     gender: Optional[str] = Field(None, description="Gender selection")
     email: Optional[EmailStr] = Field(None, description="Optional email address")
     
@@ -89,7 +97,6 @@ class EmployeeResponse(BaseModel):
     skills: Optional[list] = []
     work_experience: Optional[list] = []
     education: Optional[list] = []
-    documents: Optional[list] = []
     
     # Preferences & Settings
     contact_visibility: Optional[str] = None
@@ -131,8 +138,6 @@ class WorkExperienceInput(BaseModel):
 
 class SkillInput(BaseModel):
     name: str
-    level: Optional[str] = Field(None, description="beginner, intermediate, expert")
-    years: Optional[float] = None
 
 # --- Employee Applied Job Response Schema ---
 class AppliedJobResponse(BaseModel):
@@ -141,7 +146,7 @@ class AppliedJobResponse(BaseModel):
     job_id: str
     job_title: Optional[str] = None
     company_name: Optional[str] = None
-    status: str  # e.g., "pending", "shortlisted", "rejected"
+    status: str
     applied_at: datetime
 
 # --- Employee Saved Job Response Schema ---
