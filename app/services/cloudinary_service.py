@@ -1,8 +1,8 @@
+import os
+import re
 import cloudinary
 import cloudinary.uploader
 from fastapi import UploadFile
-import os
-import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,23 +16,29 @@ cloudinary.config(
 
 async def upload_file(file: UploadFile, folder_name: str = "general") -> str:
     """
-    Reads an uploaded file and sends it to Cloudinary.
-    Uses resource_type="auto" so PDFs and images can be viewed inline in the browser
-    instead of being forced as a download.
+    Uploads a file to Cloudinary.
+    Forces the exact file format (PDF, JPG, PNG) to prevent Cloudinary 
+    from corrupting files during auto-detection from raw bytes.
     """
     try:
+        # 1. ALWAYS reset cursor to the beginning before reading
+        await file.seek(0)
         file_content = await file.read()
         
-        # Basic validation to ensure we only process supported types
-        if file.content_type != "application/pdf" and not file.content_type.startswith("image/"):
-            raise ValueError(f"Unsupported file type: {file.content_type}")
+        # 2. Extract the file extension securely
+        # Default to 'pdf' if unknown, but normally it is inside file.filename
+        ext = "pdf"
+        if file.filename and "." in file.filename:
+            ext = file.filename.rsplit(".", 1)[-1].lower()
 
-        # Upload to Cloudinary with resource_type="auto"
-        # This is the magic fix that stops Cloudinary from treating PDFs as zip/raw downloads
+        # 3. Upload to Cloudinary with an explicit format!
+        # This is the crucial fix: passing the exact format stops Cloudinary 
+        # from guessing and corrupting the PDF structure.
         upload_result = cloudinary.uploader.upload(
             file_content,
             folder=folder_name,
-            resource_type="auto"
+            resource_type="auto",
+            format=ext 
         )
         
         return upload_result.get("secure_url")
@@ -41,44 +47,29 @@ async def upload_file(file: UploadFile, folder_name: str = "general") -> str:
         raise ValueError(f"Failed to upload file to Cloudinary: {str(e)}")
 
 
-async def delete_file(file_url: str) -> bool:
+async def delete_file(file_url: str):
     """
-    Extracts the public_id from a Cloudinary URL and deletes the file.
-    Automatically handles both images and raw documents (PDFs).
+    Extracts the public ID from a Cloudinary URL and deletes the old file to save space.
     """
-    if not file_url:
-        return False
-
+    if not file_url or "cloudinary.com" not in file_url:
+        return
+        
     try:
-        # Regex to extract the resource type (image/raw) and the path after the version number
-        # Example URL: https://res.cloudinary.com/demo/image/upload/v161234/folder/file.jpg
-        match = re.search(r'/(image|raw|video)/upload/(?:v\d+/)?(.+)$', file_url)
-        
-        if not match:
-            print("Invalid Cloudinary URL format.")
-            return False
+        # Example URL: https://res.cloudinary.com/.../upload/v12345/resumes/abc123xyz.pdf
+        parts = file_url.split('/upload/')
+        if len(parts) == 2:
+            path_part = parts[1]
             
-        r_type = match.group(1)
-        file_path = match.group(2)
-        
-        # Cloudinary Rule: 
-        # For images/videos, the public_id does NOT include the file extension.
-        # For raw files (PDFs), the public_id MUST include the file extension.
-        if r_type in ["image", "video"]:
-            # Strip the extension (e.g., "folder/file.jpg" -> "folder/file")
-            public_id = file_path.rsplit('.', 1)[0]
-        else:
-            # Keep the exact path for raw files (e.g., "folder/file.pdf")
-            public_id = file_path
-
-        # Instruct Cloudinary to destroy the file
-        response = cloudinary.uploader.destroy(
-            public_id,
-            resource_type=r_type
-        )
-        
-        return response.get("result") == "ok"
-        
+            # Remove the version tag (e.g., 'v1786383523/') if it exists
+            if path_part.startswith('v') and '/' in path_part:
+                path_part = path_part.split('/', 1)[1]
+            
+            # Remove the file extension to get the raw public_id
+            public_id = path_part.rsplit('.', 1)[0]
+            
+            # Destroy the file. We try both 'image' and 'raw' because PDFs 
+            # can be saved as either depending on how they were uploaded.
+            cloudinary.uploader.destroy(public_id, resource_type="image")
+            cloudinary.uploader.destroy(public_id, resource_type="raw")
     except Exception as e:
-        print(f"Failed to delete file from Cloudinary: {str(e)}")
-        return False
+        print(f"Failed to delete old file from Cloudinary: {e}")

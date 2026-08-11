@@ -558,7 +558,7 @@ async def upload_and_parse_resume(
 ):
     """
     Uploads the resume to Cloudinary, stores the URL, parses the data,
-    and returns the URL to the frontend.
+    and returns the URL to the frontend. Prevents duplicate storage.
     """
     if file.content_type != "application/pdf" and not file.filename.endswith(".pdf"):
         raise HTTPException(
@@ -567,7 +567,11 @@ async def upload_and_parse_resume(
         )
 
     try:
-        # Upload to Cloudinary and store the URL in the database
+        # === NEW: Check for and delete the old resume ===
+        if getattr(current_employee, "resume_url", None):
+            await delete_file(current_employee.resume_url)
+
+        # Upload the new resume to Cloudinary
         resume_url = await upload_file(file, folder_name="resumes")
         current_employee.resume_url = resume_url
     except ValueError as e:
@@ -600,29 +604,41 @@ async def upload_and_parse_resume(
                 if skill_name.lower() not in existing_skill_names:
                     current_employee.skills.append(Skill(**new_skill))
                     existing_skill_names.add(skill_name.lower())
-        
+
+    # Safely mapped education logic
     if parsed_data.get("education_level"):
-        current_employee.education_level = parsed_data["education_level"]
+        extracted_level = parsed_data["education_level"]
         
+        # If they already have education entries, update the first one's degree
+        if current_employee.education and len(current_employee.education) > 0:
+            current_employee.education[0].degree = extracted_level
+        else:
+            # Otherwise, create a new education entry for it
+            current_employee.education = [
+                Education(institution="Not Specified", degree=extracted_level)
+            ]                
+        
+    # Safely mapped experience logic
     if parsed_data.get("experience_years"):
-        current_employee.experience_years = parsed_data["experience_years"]
-        current_employee.experience = parsed_data["experience_years"]
+        try:
+            # Map it strictly to 'total_experience' as a float
+            current_employee.total_experience = float(parsed_data["experience_years"])
+        except (ValueError, TypeError):
+            # Fail silently if the AI returned text instead of a number
+            pass
         
     if parsed_data.get("languages"):
         current_employee.languages = parsed_data["languages"]
 
-    # Uses the safely mapped fallback logic we implemented earlier
+    # Uses the strictly matched fallback logic for WorkExperience schema
     if parsed_data.get("work_experience"):
         new_experiences = []
         for exp in parsed_data["work_experience"]:
             new_experiences.append(
                 WorkExperience(
-                    company=exp.get("company_name", "Not Specified"),
-                    job_title=exp.get("job_title", "Not Specified"),
-                    # The AI might not return a separate 'role/title', so we fallback to job_title
-                    title=exp.get("job_role", exp.get("job_title", "Not Specified")), 
-                    # The DB strictly requires a start_date, so we use a placeholder if the AI misses it
-                    start_date=date.today() 
+                    company_name=exp.get("company_name"),
+                    job_title=exp.get("job_title"),
+                    job_role=exp.get("job_role")
                 )
             )
         current_employee.work_experience = new_experiences
