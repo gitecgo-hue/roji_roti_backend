@@ -144,47 +144,35 @@ async def read_employee_profile(
     return employee_data
 
 # --- Helper Function to Parse Salary Strings ---
-def parse_salary_string(salary_input: Union[str, Dict[str, Any], Any]) -> SalaryExpectation:
+def parse_salary_string(salary_input: Union[str, Dict[str, Any], int, float, Any]) -> Optional[float]:
     """
-    Safely parses salary expectations whether the frontend sends a raw string ('50k')
-    or a JSON dictionary ({"min": 50000, "max": 60000}).
+    Safely parses salary input and returns a single float amount.
     """
     if not salary_input:
-        return SalaryExpectation()
+        return None
 
-    # SCENARIO A: The frontend sent a dictionary (JSON object)
+    # If the frontend sent a dictionary, grab the first numeric value it can find
     if isinstance(salary_input, dict):
-        return SalaryExpectation(
-            min=salary_input.get("min"),
-            max=salary_input.get("max"),
-            currency=salary_input.get("currency", "INR")
-        )
+        return float(salary_input.get("amount") or salary_input.get("min_salary") or salary_input.get("min") or 0)
 
-    # SCENARIO B: The frontend sent a raw string
+    # If the frontend sent an actual number already
+    if isinstance(salary_input, (int, float)):
+        return float(salary_input)
+
+    # If the frontend sent a string (e.g., "50k - 60k")
     if isinstance(salary_input, str):
         clean_str = salary_input.replace(",", "").replace(" ", "").lower()
         if "k" in clean_str:
             clean_str = clean_str.replace("k", "000")
         
+        # Find all numbers in the string
         numbers = re.findall(r'\d+', clean_str)
         
-        if not numbers:
-            return SalaryExpectation()
-            
-        if len(numbers) == 1:
-            return SalaryExpectation(min=float(numbers[0]), max=None)
-            
-        min_val = float(numbers[0])
-        max_val = float(numbers[1])
-        
-        # Swap them if the user accidentally typed "60000-50000"
-        if min_val > max_val:
-            min_val, max_val = max_val, min_val
-            
-        return SalaryExpectation(min=min_val, max=max_val)
+        if numbers:
+            # Just grab the very first number they typed
+            return float(numbers[0])
 
-    # Fallback for unexpected data types
-    return SalaryExpectation()
+    return None
 
 #--- Profile Update ---
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
@@ -306,8 +294,12 @@ async def update_employee_profile(
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
         # --- Salary Expectations ---
-        if update_dict.get("salary_expectation"):
-            current_employee.salary_expectation = parse_salary_string(update_dict["salary_expectation"])
+        frontend_salary_key = "salary_expectation"
+        
+        if frontend_salary_key in update_dict:
+            parsed_amount = parse_salary_string(update_dict[frontend_salary_key])
+            if parsed_amount is not None:
+                current_employee.expected_salary = parsed_amount
 
         # --- Arrays (Skills, Education, Work Experience) ---
         if update_dict.get("skills"):

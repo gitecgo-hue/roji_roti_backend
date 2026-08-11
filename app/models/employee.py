@@ -56,9 +56,7 @@ class ProfileDocument(BaseModel):
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class SalaryExpectation(BaseModel):
-    min: Optional[float] = None
-    max: Optional[float] = None
-    currency: Optional[str] = "INR"
+    expected_salary: Optional[float] = Field(None, description="Expected salary amount")
 
 class Availability(BaseModel):
     is_available: bool = True

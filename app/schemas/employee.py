@@ -7,10 +7,7 @@ from beanie import PydanticObjectId
 
 # --- Salary Expectation Schema ---
 class SalaryExpectation(BaseModel):
-    """Structured salary expectation to allow ranges and periods."""
-    min_salary: Optional[float] = Field(None, description="Minimum expected salary")
-    max_salary: Optional[float] = Field(None, description="Maximum expected salary")
-    period: Optional[str] = Field(None, description="Salary period (e.g., monthly, daily)")
+    expected_salary: Optional[float] = Field(None, description="Expected salary amount")
 
 # --- Employee Profile Update Schemas ---
 class EmployeeProfileUpdate(BaseModel):
