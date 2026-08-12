@@ -14,6 +14,7 @@ class JobStatus(str, Enum):
     PUBLISHED = "published"
     UNDER_REVIEW = "under_review"
     EXPIRED = "expired"
+    CLOSED = "closed"
 
 class JobType(str, Enum):
     FULL_TIME = "full_time"
