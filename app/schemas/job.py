@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, ConfigDict
 from beanie import PydanticObjectId
 from typing import Optional, List
 from datetime import datetime
@@ -134,9 +134,11 @@ class JobResponse(JobCreateRequest):
     employer_id: str
     slug: Optional[str] = None
     posted_at: Optional[datetime] = None
+    
+    # ADDED THIS LINE:
+    created_at: datetime
  
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class JobDashboardResponse(BaseModel):
     """Schema for the Employer Dashboard job cards"""
@@ -149,8 +151,7 @@ class JobDashboardResponse(BaseModel):
     applied_count: int = 0
     database_matches: int = 0
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class JobUpdateRequest(BaseModel):
     """Schema for updating an existing job post. All fields are optional."""

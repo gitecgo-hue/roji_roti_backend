@@ -58,44 +58,20 @@ class EmployerDashboardResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-# --- Employer Profile Completion Request (Used in PATCH /profile/complete) ---
-class EmployerCompleteProfileRequest(BaseModel):
-    """Schema for completing the employer's profile after registration."""
-    
-    # Personal Details
-    name: Optional[str] = Field(None, min_length=2, max_length=50)
-    email: Optional[EmailStr] = None
-    
-    # Company Details
-    company_name: Optional[str] = None
-    gstin: Optional[str] = None
-    industry: Optional[str] = None
-    company_size: Optional[str] = None
-    company_address: Optional[str] = None  # Used for Ola Maps Geocoding
-    address: Optional[str] = None
-    
-    # Additional UI fields
-    logo_url: Optional[str] = None
-    founded_year: Optional[str] = None
-    website: Optional[str] = None
-    company_type: Optional[str] = None
-    description: Optional[str] = None
-    social_profiles: Optional[Dict[str, str]] = None
-    
-    employer_type: Optional[EmployerType] = None
 
-# --- Unified Update Schema (Used in PUT /profile_update) ---
-class EmployerProfileUpdateRequest(BaseModel):
-    """Unified schema for updating both personal and company profiles"""
+# --- Unified Update Schema (Used in PATCH /profile_update) ---
+class EmployerProfileUpdate(BaseModel):
+    """Unified schema for updating or completing the employer's profile."""
     
     # --- Personal Details ---
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=2, max_length=50)
     email: Optional[EmailStr] = None
-    gstin: Optional[str] = None
+    employer_type: Optional[EmployerType] = None
     
     # --- Company Details ---
-    logo_url: Optional[str] = None
     company_name: Optional[str] = None
+    gstin: Optional[str] = None
+    logo_url: Optional[str] = None
     founded_year: Optional[str] = None
     website: Optional[str] = None
     company_size: Optional[str] = None
@@ -103,7 +79,11 @@ class EmployerProfileUpdateRequest(BaseModel):
     industry: Optional[str] = None
     description: Optional[str] = None
     social_profiles: Optional[Dict[str, str]] = None
+    
+    # --- Location Details ---
+    company_address: Optional[str] = None  # Used for Ola Maps Geocoding
     address: Optional[str] = None
+
 
 # --- Employer Kyc Detils ---
 class KYCSubmitRequest(BaseModel):

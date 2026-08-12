@@ -1,8 +1,10 @@
-from beanie import Document, Indexed, before_event, Replace, Save, Update
+from beanie import Indexed, before_event, Replace, Save, Update
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from enum import Enum
+
+from app.models.base import TranslatableDocument
 
 class KYCStatus(str, Enum):
     UNVERIFIED = "unverified"
@@ -28,10 +30,15 @@ class SubscriptionTier(str, Enum):
 class GeoLocation(BaseModel):
     type: str = "Point"
     coordinates: List[float]
+    # FIXED: Added these fields so the Ola Maps geocoder can save the city!
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
 
-class Employer(Document):
+# FIXED: Inherit from TranslatableDocument instead of standard Document
+class Employer(TranslatableDocument):
     # --- Core Identity & Auth ---
-    phone: Indexed(str, unique=True)
+    phone: str = Indexed(str, unique=True)
     phone_verified: bool = False
     email: Optional[EmailStr] = None
     email_verified: bool = False
@@ -50,7 +57,7 @@ class Employer(Document):
     company_type: Optional[str] = None
     social_profiles: Optional[dict] = None
     
-    # Add these inside your Employer class
+    # --- Billing & Finance ---
     gstin: Optional[str] = None
     billing_address: Optional[str] = None
     available_credits: int = 0
@@ -74,8 +81,8 @@ class Employer(Document):
     employer_type: EmployerType = EmployerType.COMPANY
     subscription_tier: SubscriptionTier = SubscriptionTier.FREE
     is_active: bool = True
-    is_verified: bool = False # Verified by Admin
-
+    is_verified: bool = False 
+    
     last_otp_requested_at: Optional[datetime] = None
     
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
