@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.v1.endpoints import (
+    candidate,
     employees,
     employers,
     auth,
@@ -27,6 +28,9 @@ api_router.include_router(employees.router, prefix="/employees", tags=["Employee
 
 # Attach the employers endpoints
 api_router.include_router(employers.router, prefix="/employers", tags=["Employers"])
+
+# Attach the candidate endpoints
+api_router.include_router(candidate.router, prefix="/candidate", tags=["Candidate"])
 
 # Attach the jobs endpoints
 api_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])

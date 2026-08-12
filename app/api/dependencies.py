@@ -134,6 +134,36 @@ async def get_current_admin(user_info: dict = Depends(get_current_user)) -> Admi
         
     return admin_user
 
+async def get_admin_or_employer(user_info: dict = Depends(get_current_user)):
+    """
+    UNIVERSAL GUARD: Authenticates the user as either an Admin or an Employer.
+    """
+    if not ObjectId.is_valid(user_info["id"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Invalid token format."
+        )
+
+    # Route the database check based on the token's user_type
+    if user_info["user_type"] == "admin":
+        user = await Admin.get(user_info["id"])
+    elif user_info["user_type"] == "employer":
+        user = await Employer.get(user_info["id"])
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Access denied. Admin or Employer credentials required."
+        )
+
+    # Ensure the user actually still exists in the database
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="User account not found. Please log in again."
+        )
+        
+    return user
+
 async def get_any_current_user(user_info: dict = Depends(get_current_user)):
     """
     UNIVERSAL GUARD: Authenticates the user as either an Employer or an Employee.

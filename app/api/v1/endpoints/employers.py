@@ -1,4 +1,5 @@
 # --- IMPORTS ---
+from apscheduler import job
 from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field, ValidationError
@@ -168,8 +169,8 @@ async def update_employer_profile(
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Unified endpoint to update or complete an employer's profile.
-    Handles geocoding, field updates, and auto-provisioning the free subscription.
+    Unified endpoint to update the employer's profile.
+    Separates response into Personal and Company blocks for the UI.
     """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
@@ -181,9 +182,9 @@ async def update_employer_profile(
         }
 
     # ==========================================
-    # 1. EMAIL DUPLICATION & VERIFICATION
+    # 1. EMAIL & GSTIN VERIFICATION LOGIC
     # ==========================================
-    if update_dict.get("email"):
+    if "email" in update_dict and update_dict["email"]:
         existing_employer = await Employer.find_one(
             {"email": update_dict["email"], "_id": {"$ne": current_employer.id}}
         )
@@ -193,9 +194,15 @@ async def update_employer_profile(
                 detail="An account with this email already exists."
             )
         
+        # Reset email verification if email changed
         if update_dict["email"] != getattr(current_employer, "email", None):
             current_employer.email = update_dict["email"]
             current_employer.email_verified = False
+
+    # Reset GSTIN verification if GST number changed
+    if "gstin" in update_dict:
+        if update_dict["gstin"] != getattr(current_employer, "gstin", None):
+            current_employer.gstin_verified = False
 
     # ==========================================
     # 2. OLA MAPS AUTO-GEOCODING
@@ -205,10 +212,7 @@ async def update_employer_profile(
         try:
             coords = await MapService.get_coordinates(address_field)
             if coords:
-                # Inject the formatted address
                 update_dict["address"] = coords.get("formatted_address", address_field)
-                
-                # Create the rich GeoLocation object for the database
                 current_employer.location = GeoLocation(
                     type="Point",
                     coordinates=[coords["longitude"], coords["latitude"]],
@@ -216,17 +220,15 @@ async def update_employer_profile(
                 )
         except Exception as e:
             print(f"MapService Error: {e}")
-            update_dict["address"] = address_field # Fallback
+            update_dict["address"] = address_field 
             
-        # Clean up old frontend key if they sent 'company_address'
         if "company_address" in update_dict:
             del update_dict["company_address"]
 
     # ==========================================
-    # 3. DIRECT FIELD MAPPING
+    # 3. DIRECT FIELD MAPPING & SAVE
     # ==========================================
     for field, value in update_dict.items():
-        # Prevent overriding the location object we just built
         if hasattr(current_employer, field) and field != "location":
             setattr(current_employer, field, value)
             
@@ -236,8 +238,6 @@ async def update_employer_profile(
     # 4. SUBSCRIPTIONS & BACKGROUND TASKS
     # ==========================================
     async def setup_new_employer_if_needed(emp_id: str, email: str, name: str):
-        # We check if a subscription already exists so we don't duplicate it 
-        # when they update their profile a second time!
         existing_sub = await Subscription.find_one({"employer_id": emp_id})
         if not existing_sub:
             base_sub = Subscription(
@@ -263,29 +263,18 @@ async def update_employer_profile(
     )
 
     # ==========================================
-    # 5. RESPONSE PAYLOAD
+    # 5. UI-TAILORED RESPONSE PAYLOAD
     # ==========================================
-    is_profile_complete = bool(
-        getattr(current_employer, "name", None) and 
-        getattr(current_employer, "company_name", None) and 
-        getattr(current_employer, "email", None) and
-        getattr(current_employer, "industry", None)
-    )
-
     return {
         "status": "success",
-        "message": "Employer profile updated successfully.",
-        "is_profile_complete": is_profile_complete,
-        "email_verified": getattr(current_employer, "email_verified", False),
+        "message": "Profile updated successfully.",
         "updated_fields": list(update_dict.keys()),
-        "employer": {
-            "id": str(current_employer.id),
-            "owner_name": getattr(current_employer, "name", None),
-            "company_name": getattr(current_employer, "company_name", None),
-            "email": getattr(current_employer, "email", None),
-            "phone": getattr(current_employer, "phone", None),
-            "is_verified": getattr(current_employer, "is_verified", False)
-        }
+        
+        # UI Card 1: Basic Details & GST
+        "personal_profile": EmployerPersonalProfileResponse.model_validate(current_employer).model_dump(),
+        
+        # UI Card 2: Company Profile
+        "company_profile": EmployerCompanyProfileResponse.model_validate(current_employer).model_dump()
     }
 
 # --- UPLOAD PROFILE PICTURE / LOGO ---
@@ -507,7 +496,8 @@ async def list_job_applicants(
             
             # --- FIXED CRASH SAFEGUARD ---
             "employee_category": getattr(employee, "job_category", "N/A") if employee else "N/A",
-            
+
+            "employee_email": employee.email if employee else "N/A",
             "employee_phone": employee.phone if employee else "N/A", 
             "status": getattr(app, "status", "applied"),
             "applied_at": getattr(app, "applied_at", datetime.utcnow())
@@ -558,8 +548,8 @@ async def update_application_status(
         job_closed = True
 
     # Determine the notification title and message dynamically
-    job_title = job.title if job else "a recent job"
-    
+    job_title = job.job_title if job else "a recent job" 
+       
     if status_str.lower() == "hired":
         title = "Hired! 🎉"
         message = f"Congratulations! You have been hired for the '{job_title}' role."

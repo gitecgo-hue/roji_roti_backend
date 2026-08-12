@@ -109,7 +109,7 @@ class EmployeeResponse(BaseModel):
     # Location
     location: Optional[dict] = None
     
-    # Professional Details (Auto-serialized by FastAPI)
+    # Professional Details
     skills: Optional[list] = []
     work_experience: Optional[list] = []
     education: Optional[list] = []

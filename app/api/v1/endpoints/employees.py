@@ -899,9 +899,16 @@ async def get_public_company_profile(
         "employer_id": str(employer.id),
         "recruiter_name": loc_emp.get("name", "Not Provided"),
         "company_name": loc_emp.get("company_name", "Not Provided"),
+        "gstin": loc_emp.get("gstin", "Not Provided"),
+        "logo_url": loc_emp.get("logo_url", None),
+        "founded_year": loc_emp.get("founded_year", "Not Provided"),
+        "website": loc_emp.get("website", "Not Provided"),
+        "company_size": loc_emp.get("company_size", "Not Provided"),
+        "company_type": loc_emp.get("company_type", "Not Provided"),
         "industry": loc_emp.get("industry", "Not Provided"),
-        "email": loc_emp.get("email", "Not Provided"),
-        "logo_url": loc_emp.get("logo_url", None)
+        "description": loc_emp.get("description", "Not Provided"),
+        "social_profiles": loc_emp.get("social_profiles", {}),
+        "address": loc_emp.get("address", "Not Provided")
     }
 
 # --- Category of jobs ---

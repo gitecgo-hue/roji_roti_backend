@@ -15,7 +15,7 @@ class ApplicationStatus(str, Enum):
 class JobApplication(Document):
     # Using PydanticObjectId is the "Pro" way for Beanie to handle MongoDB _id fields
     job_id: PydanticObjectId 
-    employee_id: PydanticObjectId  # Standardized to employee_id across the database
+    employee_id: PydanticObjectId
     employer_id: PydanticObjectId 
     
     # Enums prevent typos in your code later

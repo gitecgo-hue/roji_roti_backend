@@ -30,12 +30,10 @@ class SubscriptionTier(str, Enum):
 class GeoLocation(BaseModel):
     type: str = "Point"
     coordinates: List[float]
-    # FIXED: Added these fields so the Ola Maps geocoder can save the city!
     city: Optional[str] = None
     state: Optional[str] = None
     country: Optional[str] = None
 
-# FIXED: Inherit from TranslatableDocument instead of standard Document
 class Employer(TranslatableDocument):
     # --- Core Identity & Auth ---
     phone: str = Indexed(str, unique=True)
@@ -59,13 +57,14 @@ class Employer(TranslatableDocument):
     
     # --- Billing & Finance ---
     gstin: Optional[str] = None
+    gstin_verified: bool = False  # ADDED: To support the GST 'Verify' UI button
     billing_address: Optional[str] = None
     available_credits: int = 0
 
     # --- KYC & Verification ---
     kyc_status: KYCStatus = KYCStatus.UNVERIFIED
-    kyc_documents: Optional[Dict[str, str]] = None  # e.g., {"pan_number": "ABCDE1234F", "document_url": "https://s3..."}
-    kyc_remarks: Optional[str] = None               # Why it failed or admin notes
+    kyc_documents: Optional[Dict[str, str]] = None 
+    kyc_remarks: Optional[str] = None               
     verified_by: Optional[VerificationSource] = None 
     verified_at: Optional[datetime] = None
     

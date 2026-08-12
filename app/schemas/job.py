@@ -37,8 +37,11 @@ class MinimumEducation(str, Enum):
 
 class TotalExperience(str, Enum):
     ANY = "Any"
-    EXPERIENCED_ONLY = "Experienced Only"
-    FRESHER_ONLY = "Fresher Only"
+    ZERO_TO_ONE = "0-1"
+    ONE_TO_TWO = "1-2"
+    TWO_TO_THREE = "2-3"
+    THREE_TO_FIVE = "3-5"
+    FIVE_TO_SEVEN = "5+"
 
 class SkillPreference(str, Enum):
     FLEXIBLE_WORKING_HOURS = "Flexible Working Hours"

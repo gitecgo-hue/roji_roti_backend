@@ -101,16 +101,21 @@ class ReferralDashboardResponse(BaseModel):
     total_referred: int
     total_coins_earned: int
 
+# --- employer Profile Response Schemas ---
 class EmployerPersonalProfileResponse(BaseModel):
-    """Schema for returning only the personal details"""
+    """Schema mapping exactly to the 'Profile' UI Card"""
     name: Optional[str] = None
     email: Optional[EmailStr] = None
+    email_verified: bool = False
     phone: str
-    email_verified: bool
     gstin: Optional[str] = None
+    gstin_verified: bool = False
 
+    model_config = ConfigDict(from_attributes=True)
+
+# --- employer Company Profile Response Schemas ---
 class EmployerCompanyProfileResponse(BaseModel):
-    """Schema for returning only the business details"""
+    """Schema mapping exactly to the 'Company profile' UI Card"""
     company_name: Optional[str] = None
     logo_url: Optional[str] = None
     founded_year: Optional[str] = None
@@ -121,6 +126,8 @@ class EmployerCompanyProfileResponse(BaseModel):
     description: Optional[str] = None
     social_profiles: Optional[Dict[str, str]] = None
     address: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 class CompanyProfilePublicResponse(BaseModel):
     employer_id: str
