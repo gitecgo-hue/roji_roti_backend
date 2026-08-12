@@ -251,6 +251,12 @@ async def update_employee_profile(
     # ==========================================
     try:
         # --- Availability & Preferences ---
+        if "notice_period_days" in update_dict:
+            if not current_employee.availability:
+                current_employee.availability = Availability()
+            current_employee.availability.notice_period_days = update_dict["notice_period_days"]
+
+        # --- Preferences ---
         pref_keys = ["preferred_job_types", "category", "preferred_roles", "preferred_locations", "remote_work"]
         if any(k in update_dict for k in pref_keys):
             if not current_employee.preferences:
@@ -296,23 +302,21 @@ async def update_employee_profile(
             new_education = []
             for edu in update_dict["education"]:
                 if isinstance(edu, dict):
-                    # Check for 'institution' first, fallback to 'institute_school'
                     inst_name = edu.get("institute")
+                    deg_val = edu.get("degree")
+                    field_val = edu.get("field_of_study")
                     
-                    # Check for 'degree' first, fallback to 'field_of_study'
-                    deg_name = edu.get("field_of_study")
-
-                    year_val = edu.get("start_year")
-                    start_yr = int(year_val) if str(year_val or "").isdigit() else None
+                    sy_val = edu.get("start_year")
+                    start_yr = int(sy_val) if str(sy_val or "").isdigit() else None
                     
-                    # Handle year safely whether it's 'end_year' or 'year'
-                    year_val = edu.get("end_year")
-                    end_yr = int(year_val) if str(year_val or "").isdigit() else None
+                    ey_val = edu.get("end_year")
+                    end_yr = int(ey_val) if str(ey_val or "").isdigit() else None
 
                     new_education.append(
                         Education(
-                            institution=inst_name,
-                            degree=deg_name,
+                            institute=inst_name,
+                            degree=deg_val,
+                            field_of_study=field_val,
                             start_year=start_yr,
                             end_year=end_yr
                         )
@@ -621,7 +625,7 @@ async def upload_and_parse_resume(
         else:
             # Otherwise, create a new education entry for it
             current_employee.education = [
-                Education(institution="Not Specified", degree=extracted_level)
+                Education(institute="Not Specified", degree=extracted_level)
             ]                
         
     # Safely mapped experience logic

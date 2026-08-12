@@ -44,9 +44,9 @@ class WorkExperience(BaseModel):
     currently_working_here: Optional[bool] = None
 
 class Education(BaseModel):
-    institution: str
+    institute: str
     degree: Optional[str] = None
-    field: Optional[str] = None
+    field_of_study: Optional[str] = None
     start_year: Optional[int] = None
     end_year: Optional[int] = None
 
@@ -81,7 +81,8 @@ class ProfileMetadata(BaseModel):
 # FIXED: Moved these above EmployeeProfileUpdate to prevent NameError
 class EducationUpdate(BaseModel):
     institute: Optional[str] = None
-    field_of_study: Optional[str] = None
+    degree: Optional[str] = None          
+    field_of_study: Optional[str] = None 
     start_year: Optional[str] = None
     end_year: Optional[str] = None
 

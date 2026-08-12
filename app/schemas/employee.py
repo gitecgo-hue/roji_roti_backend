@@ -9,6 +9,7 @@ from beanie import PydanticObjectId
 # =====================================================================
 class EducationUpdate(BaseModel):
     institute: Optional[str] = None
+    degree: Optional[str] = None          
     field_of_study: Optional[str] = None
     start_year: Optional[str] = None
     end_year: Optional[str] = None
