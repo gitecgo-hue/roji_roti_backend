@@ -71,7 +71,6 @@ from app.services.cloudinary_service import delete_file
 from app.services.location import OlaMapsService
 
 # --- Utilities Imports ---
-from app.utils.storage import StorageService
 from app.utils.maps import MapService
 from app.utils.translator import translate_document_fields
 
@@ -118,7 +117,7 @@ async def get_employee_dashboard(
     
     is_available = current_employee.availability.is_available if current_employee.availability else False
     location_display = current_employee.location.city if current_employee.location and current_employee.location.city else "Location pending"
-    daily_rate = current_employee.salary_expectation.min if current_employee.salary_expectation else None
+    daily_rate = current_employee.expected_salary
 
     return EmployeeDashboardResponse(
         name=loc_emp.get("name", "User"),
@@ -285,8 +284,8 @@ async def update_employee_profile(
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
         # --- Salary Expectations ---        
-        if "salary_expectation" in update_dict:
-            parsed_amount = parse_salary_string(update_dict["salary_expectation"])
+        if "expected_salary" in update_dict:
+            parsed_amount = parse_salary_string(update_dict["expected_salary"])
             if parsed_amount is not None:
                 current_employee.expected_salary = parsed_amount
 

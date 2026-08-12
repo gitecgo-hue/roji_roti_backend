@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # --- Security & Auth ---
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8 
 
     # --- Database Settings ---
     MONGODB_URL: str
@@ -28,11 +28,10 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_SECRET: Optional[str] = None
     RAZORPAY_WEBHOOK_SECRET: Optional[str] = None
 
-    # --- Amazon S3 (Storage) ---
-    AWS_ACCESS_KEY_ID: Optional[str] = None
-    AWS_SECRET_ACCESS_KEY: Optional[str] = None
-    AWS_REGION: str = "ap-south-1"  # Mumbai region is best for India
-    AWS_S3_BUCKET_NAME: Optional[str] = None
+    # ---cloudinary (Media Storage) ---
+    CLOUDINARY_CLOUD_NAME: Optional[str] = None
+    CLOUDINARY_API_KEY: Optional[str] = None
+    CLOUDINARY_API_SECRET: Optional[str] = None
 
     # --- External APIs ---
     OLA_MAPS_API_KEY: str 
