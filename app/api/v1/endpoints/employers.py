@@ -18,7 +18,7 @@ from app.api.dependencies import get_current_employer, get_current_employee
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource
-from app.models.employee import Employee, Skill, Education, SalaryExpectation, ProfileDocument
+from app.models.employee import Employee, Skill, Education, ProfileDocument
 from app.models.subscriptions import Subscription
 from app.models.transaction import Transaction
 from app.models.notification import Notification, NotificationType
@@ -370,7 +370,7 @@ async def update_employee_profile(
 
         # Convert single float into a SalaryExpectation object
         if update_dict.get("expected_salary"):
-            current_employee.salary_expectation = SalaryExpectation(
+            current_employee.expected_salary = SalaryExpectation(
                 min=update_dict["expected_salary"],
                 max=update_dict["expected_salary"]
             )

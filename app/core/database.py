@@ -6,7 +6,7 @@ from app.core.config import settings
 
 # Models
 from app.models.admin import Admin
-from app.models.employee import Application, Employee
+from app.models.employee import JobApplication, Employee
 from app.models.employer import Employer
 from app.models.job import Job
 from app.models.rating import Rating
@@ -58,7 +58,6 @@ async def connect_to_mongo():
             Employee,
             Employer,        
             Job,
-            Application,
             JobApplication,
             Notification,        
             Rating,

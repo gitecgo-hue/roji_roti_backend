@@ -43,7 +43,6 @@ from app.models.employee import (
     Skill,
     WorkExperience,
     Education,
-    SalaryExpectation,
     ProfileDocument,
     Availability,
     Preferences,
@@ -240,7 +239,6 @@ async def update_employee_profile(
         "age": "age",
         "gender": "gender",
         "referred_by_id": "referred_by_id",
-        "experience_years": "experience_years",
         "total_experience": "total_experience"
     }
     
@@ -293,41 +291,69 @@ async def update_employee_profile(
         if update_dict.get("skills"):
             current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
 
-        # FIXED: Overwrite the education array completely instead of appending
+        # FIXED: Safely check for both Pydantic's standard DB keys AND the raw frontend keys
         if "education" in update_dict:
             new_education = []
             for edu in update_dict["education"]:
                 if isinstance(edu, dict):
+                    # Check for 'institution' first, fallback to 'institute_school'
+                    inst_name = edu.get("institute")
+                    
+                    # Check for 'degree' first, fallback to 'field_of_study'
+                    deg_name = edu.get("field_of_study")
+
+                    year_val = edu.get("start_year")
+                    start_yr = int(year_val) if str(year_val or "").isdigit() else None
+                    
+                    # Handle year safely whether it's 'end_year' or 'year'
+                    year_val = edu.get("end_year")
+                    end_yr = int(year_val) if str(year_val or "").isdigit() else None
+
                     new_education.append(
                         Education(
-                            institution=edu.get("institute_school", "Not Specified"),
-                            degree=edu.get("education_level"),
-                            end_year=int(edu.get("year")) if str(edu.get("year") or "").isdigit() else None
+                            institution=inst_name,
+                            degree=deg_name,
+                            start_year=start_yr,
+                            end_year=end_yr
                         )
                     )
+                else:
+                    # If Pydantic already converted it to an object perfectly, just append it
+                    new_education.append(edu)
+                    
             current_employee.education = new_education
-            
-        # FIXED: Only update the top-level education string, don't blindly append to the array!
-        if update_dict.get("education_level"):
-            current_employee.education_level = update_dict["education_level"]
-            if current_employee.education and len(current_employee.education) > 0:
-                current_employee.education[0].degree = update_dict["education_level"]
-            else:
-                current_employee.education = [Education(institution="Not Specified", degree=update_dict["education_level"])]
 
         # FIXED: Matched exact DB schema keys (company_name, job_title) so they don't save as null
         if "work_experience" in update_dict:
             new_exp = []
             for exp in update_dict["work_experience"]:
                 if isinstance(exp, dict):
+                    # Map possible frontend keys to the DB model fields
+                    jt = exp.get("job_title") or exp.get("title") or exp.get("job")
+                    jr = exp.get("job_role") or exp.get("role")
+                    cn = exp.get("company_name") or exp.get("company") or exp.get("employer")
+                    sy = exp.get("start_year") or exp.get("start")
+                    ey = exp.get("end_year") or exp.get("end")
+                    currently = exp.get("currently_working_here") if "currently_working_here" in exp else exp.get("currently")
+
+                    # Safely coerce years to ints when possible
+                    try:
+                        sy_val = int(sy) if sy is not None and str(sy).isdigit() else None
+                    except Exception:
+                        sy_val = None
+                    try:
+                        ey_val = int(ey) if ey is not None and str(ey).isdigit() else None
+                    except Exception:
+                        ey_val = None
+
                     new_exp.append(
                         WorkExperience(
-                            job_title=exp.get("job_title"),
-                            job_role=exp.get("job_role"),
-                            company_name=exp.get("company_name"),
-                            experience_years=exp.get("experience_years"),
-                            experience_months=exp.get("experience_months"),
-                            currently_working_here=exp.get("currently_working_here")
+                            job_title=jt,
+                            job_role=jr,
+                            company_name=cn,
+                            start_year=sy_val,
+                            end_year=ey_val,
+                            currently_working_here=bool(currently) if currently is not None else None
                         )
                     )
             current_employee.work_experience = new_exp
@@ -435,7 +461,7 @@ async def delete_employee_profile_picture(current_employee = Depends(get_current
     if not current_employee.profile_picture_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You do not have a profile picture to delete.")
 
-    deletion_successful = delete_file(current_employee.profile_picture_url)
+    deletion_successful = await delete_file(current_employee.profile_picture_url)
 
     if not deletion_successful:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete the image from the cloud provider.")

@@ -55,9 +55,6 @@ class ProfileDocument(BaseModel):
     url: HttpUrl
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class SalaryExpectation(BaseModel):
-    expected_salary: Optional[float] = Field(None, description="Expected salary amount")
-
 class Availability(BaseModel):
     is_available: bool = True
     notice_period_days: Optional[int] = 0
@@ -80,6 +77,22 @@ class ProfileMetadata(BaseModel):
 # =====================================================================
 # API UPDATE SCHEMAS (Frontend Payloads)
 # =====================================================================
+
+# FIXED: Moved these above EmployeeProfileUpdate to prevent NameError
+class EducationUpdate(BaseModel):
+    institute: Optional[str] = None
+    field_of_study: Optional[str] = None
+    start_year: Optional[str] = None
+    end_year: Optional[str] = None
+
+class WorkExperienceUpdate(BaseModel):
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    currently_working_here: Optional[bool] = None
+
 class EmployeeProfileUpdate(BaseModel):
     # --- Basic Details ---
     full_name: Optional[str] = None
@@ -102,20 +115,6 @@ class EmployeeProfileUpdate(BaseModel):
     work_experience: Optional[List[WorkExperienceUpdate]] = None
     education: Optional[List[EducationUpdate]] = None
 
-class EducationUpdate(BaseModel):
-    institute: Optional[str] = None
-    field_of_study: Optional[str] = None
-    start_year: Optional[str] = None
-    end_year: Optional[str] = None
-
-class WorkExperienceUpdate(BaseModel):
-    job_title: Optional[str] = None
-    job_role: Optional[str] = None
-    company_name: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
-    currently_working_here: Optional[bool] = None
-
 # =====================================================================
 # MAIN EMPLOYEE DOCUMENT
 # =====================================================================
@@ -133,7 +132,9 @@ class Employee(TranslatableDocument):
     email: Optional[EmailStr] = None
     email_verified: bool = False
     total_experience: Optional[float] = None
-    avatar: Optional[str] = None
+    
+    # FIXED: Renamed to match the upload/delete endpoints
+    profile_picture_url: Optional[str] = None
     
     # --- Location Data ---
     location_name: Optional[str] = None
@@ -192,7 +193,8 @@ class ApplicationStatus(str, Enum):
     HIRED = "hired"               # Officially hired for the role
     COMPLETED = "completed"       # Work finished; triggers rating/review flow
 
-class Application(TranslatableDocument):
+# FIXED: Renamed from 'Application' to 'JobApplication' to match your endpoint imports
+class JobApplication(TranslatableDocument):
     job_id: PydanticObjectId
     employee_id: PydanticObjectId
     employer_id: Optional[PydanticObjectId] = None
