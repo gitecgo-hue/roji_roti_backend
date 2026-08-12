@@ -4,34 +4,54 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from beanie import PydanticObjectId
 
+# =====================================================================
+# API UPDATE SCHEMAS (Frontend Payloads)
+# =====================================================================
+class EducationUpdate(BaseModel):
+    institute: Optional[str] = None
+    field_of_study: Optional[str] = None
+    start_year: Optional[str] = None
+    end_year: Optional[str] = None
 
-# --- Salary Expectation Schema ---
-class SalaryExpectation(BaseModel):
-    expected_salary: Optional[float] = Field(None, description="Expected salary amount")
+class WorkExperienceUpdate(BaseModel):
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
+    company_name: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    currently_working_here: Optional[bool] = None
 
-# --- Employee Profile Update Schemas ---
 class EmployeeProfileUpdate(BaseModel):
     """Unified schema for updating the employee's full profile"""
-    
-    # --- Personal Details ---
-    name: Optional[str] = None
-    location_name: Optional[str] = None 
-    
-    # --- Professional Details ---
-    title: Optional[str] = None 
-    skills: Optional[List[str]] = None
-    total_experience: Optional[float] = None 
-    expected_salary: Optional[float] = None
-    education: Optional[str] = None 
-    resume_url: Optional[str] = None
+    # --- Basic Details ---
+    full_name: Optional[str] = None
+    job_title: Optional[str] = None
+    location: Optional[str] = None
+    about_you: Optional[str] = None
 
-# --- location Input for Job Search ---
+    # --- Preferences ---
+    expected_salary: Optional[float] = None
+    notice_period_days: Optional[int] = None
+    preferred_job_types: Optional[List[str]] = None
+    preferred_locations: Optional[List[str]] = None
+    remote_work: Optional[bool] = None
+
+    # --- Skills & Languages ---
+    skills: Optional[List[str]] = None
+    languages: Optional[List[str]] = None
+
+    # --- Nested Lists ---
+    work_experience: Optional[List[WorkExperienceUpdate]] = None
+    education: Optional[List[EducationUpdate]] = None
+
+# =====================================================================
+# OTHER SCHEMAS
+# =====================================================================
+
 class LocationInput(BaseModel):
     """Handles latitude and longitude for GPS-based job filtering."""
     latitude: float
     longitude: float
-
-# --- Employee Profile & Status Schemas ---
 
 class AvailabilityUpdate(BaseModel):
     """
@@ -41,7 +61,6 @@ class AvailabilityUpdate(BaseModel):
     """
     is_available: bool
 
-# --- Registration & Response Schemas ---
 class EmployeeCreate(BaseModel):
     """
     Fields required for mobile registration of Job Seekers.
@@ -74,7 +93,6 @@ class EmployeeCreate(BaseModel):
     # Referral and tracking
     referred_by_id: Optional[str] = None
 
-# --- Employee Response Schemas ---
 class EmployeeResponse(BaseModel):
     id: str
     role: str
@@ -97,7 +115,7 @@ class EmployeeResponse(BaseModel):
     
     # Preferences & Settings
     contact_visibility: Optional[str] = None
-    expected_salary: Optional[dict] = None
+    expected_salary: Optional[float] = None
     availability: Optional[dict] = None
     preferences: Optional[dict] = None
     social_links: Optional[dict] = None
@@ -107,7 +125,6 @@ class EmployeeResponse(BaseModel):
     status: Optional[str] = None
     verified_by_admin: bool = False
 
-# --- Employee Dashboard Response Schema ---
 class EmployeeDashboardResponse(BaseModel):
     """
     Schema for the employee-facing dashboard.
@@ -125,7 +142,6 @@ class EmployeeDashboardResponse(BaseModel):
         from_attributes=True
     )
 
-# --- Employee Work Experience & Skills Input Schemas ---
 class WorkExperienceInput(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
@@ -137,7 +153,6 @@ class WorkExperienceInput(BaseModel):
 class SkillInput(BaseModel):
     name: str
 
-# --- Employee Applied Job Response Schema ---
 class AppliedJobResponse(BaseModel):
     """Schema for returning a job the employee has applied to"""
     application_id: str
@@ -147,7 +162,6 @@ class AppliedJobResponse(BaseModel):
     status: str
     applied_at: datetime
 
-# --- Employee Saved Job Response Schema ---
 class SavedJobResponse(BaseModel):
     """Schema for returning a saved job to the employee"""
     job_id: str
