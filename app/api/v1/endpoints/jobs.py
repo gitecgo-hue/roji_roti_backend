@@ -17,6 +17,7 @@ from app.models.employee import GeoLocation, Employee
 from app.models.application import JobApplication
 from app.models.base import TranslatableDocument
 from app.models.category import Category
+from app.models.application import JobApplication, ApplicationStatus
 
 # --- Import Config ---
 from app.core.config import settings
@@ -467,28 +468,69 @@ async def search_jobs(
 # =====================================================================
 # SINGLE JOB DETAIL VIEW
 # =====================================================================
-@router.get("/{job_id}", response_model=dict, status_code=status.HTTP_200_OK)
-async def get_single_job(
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(
     job_id: str,
     lang: str = Depends(get_user_language),
 ):
-    try:
-        parsed_id = PydanticObjectId(job_id)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Job ID format.")
-
-    job = await Job.get(parsed_id)
-
+    # 1. Fetch the job from the database
+    job = await Job.get(PydanticObjectId(job_id))
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+        raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status != "published" or not job.is_active:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This job is no longer available.")
+    # 2. Increment view count (this saves to DB instantly)
+    await job.update({"$inc": {"views_count": 1}})
 
-    actual_applicant_count = await JobApplication.find({"job_id": str(job.id)}).count()
-    job.applicants_count = actual_applicant_count
+    # ==========================================
+    #3.QUERIES (Handling ObjectId vs String)
+    # ==========================================
+    
+    # Applicants
+    real_applicants = await JobApplication.find({"job_id": job.id}).count()
+    if real_applicants == 0:
+        real_applicants = await JobApplication.find({"job_id": str(job.id)}).count()
+        
+    # Shortlisted
+    real_shortlisted = await JobApplication.find(
+        {"job_id": job.id, "status": ApplicationStatus.SHORTLISTED}
+    ).count()
+    if real_shortlisted == 0:
+        real_shortlisted = await JobApplication.find(
+            {"job_id": str(job.id), "status": "shortlisted"}
+        ).count()
 
-    return job.localize(lang_code=lang)
+    # Hires
+    real_hires = await JobApplication.find(
+        {"job_id": job.id, "status": ApplicationStatus.HIRED}
+    ).count()
+    if real_hires == 0:
+        real_hires = await JobApplication.find(
+            {"job_id": str(job.id), "status": "hired"}
+        ).count()
+
+    # ==========================================
+    # 4. INJECT COUNTS POST-LOCALIZATION
+    # ==========================================
+    
+    # 1. Run localization
+    localized_job = job.localize(lang_code=lang)
+    
+    # 2. Force it into a standard dictionary
+    if hasattr(localized_job, "model_dump"):
+        job_dict = localized_job.model_dump()
+    elif hasattr(localized_job, "dict"):
+        job_dict = localized_job.dict()
+    else:
+        job_dict = dict(localized_job)
+    
+    # 3. Inject our live stats
+    job_dict["applicants_count"] = real_applicants
+    job_dict["shortlisted_count"] = real_shortlisted
+    job_dict["hires_count"] = real_hires
+    job_dict["views_count"] = getattr(job, "views_count", 0) + 1
+
+    # 4. Return the raw dictionary (FastAPI will map it perfectly to JobResponse now)
+    return job_dict
 
 # =====================================================================
 # EMPLOYER: UPDATE JOB POST

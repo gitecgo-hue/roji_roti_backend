@@ -147,8 +147,10 @@ class JobResponse(JobCreateRequest):
     employer_id: str
     slug: Optional[str] = None
     posted_at: Optional[datetime] = None
-    
-    # ADDED THIS LINE:
+    applicants_count: Optional[int] = 0
+    shortlisted_count: Optional[int] = 0
+    hires_count: Optional[int] = 0
+    views_count: Optional[int] = 0
     created_at: datetime
  
     model_config = ConfigDict(from_attributes=True)

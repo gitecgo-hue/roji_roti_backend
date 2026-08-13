@@ -467,22 +467,72 @@ async def get_my_jobs(
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
-    Retrieves a list of all job posts created by the currently logged-in employer.
-    This includes published jobs, drafts, and expired jobs so the employer can manage them.
+    Retrieves a list of all job posts created by the currently logged-in employer,
+    including real-time dynamic applicant statistics.
     """
     employer_id_str = str(current_employer.id)
     
-    # Query the database for jobs matching this specific employer
-    # We use $or to safely catch the ID whether it was saved as a string or an ObjectId
+    # 1. Fetch all jobs for this employer
     my_jobs = await Job.find({
         "$or": [
             {"employer_id": employer_id_str},
             {"employer_id": ObjectId(employer_id_str)}
         ]
-    }).sort("-created_at").to_list() # Sorts so the newest jobs appear at the top
+    }).sort("-created_at").to_list()
 
-    # Return the list (FastAPI will automatically format it to your JobResponse schema)
-    return my_jobs
+    if not my_jobs:
+        return []
+
+    # 2. Extract job IDs in both String and ObjectId formats
+    job_ids_str = [str(job.id) for job in my_jobs]
+    job_ids_obj = [job.id for job in my_jobs]
+
+    # 3. Fetch ALL applications for ALL these jobs in ONE single query
+    all_applications = await JobApplication.find({
+        "$or": [
+            {"job_id": {"$in": job_ids_str}},
+            {"job_id": {"$in": job_ids_obj}}
+        ]
+    }).to_list()
+
+    # 4. Create a dictionary to hold our real-time tallies
+    # Format: {"job_id_123": {"applicants": 0, "shortlisted": 0, "hires": 0}}
+    stats = {jid: {"applicants": 0, "shortlisted": 0, "hires": 0} for jid in job_ids_str}
+
+    # 5. Loop through the applications once and count them up
+    for app in all_applications:
+        jid = str(app.job_id)
+        if jid in stats:
+            stats[jid]["applicants"] += 1
+            
+            # Convert status to a lowercase string safely to catch both Enums and raw strings
+            status_str = str(getattr(app, "status", "")).lower()
+            
+            if "shortlisted" in status_str:
+                stats[jid]["shortlisted"] += 1
+            elif "hired" in status_str:
+                stats[jid]["hires"] += 1
+
+    # 6. Inject the tallies into the job dictionaries and return
+    response_list = []
+    for job in my_jobs:
+        # Dump to dictionary to bypass the strict Pydantic serializer
+        job_dict = job.model_dump() if hasattr(job, "model_dump") else dict(job)
+        
+        jid = str(job.id)
+        
+        # Inject the live stats
+        job_dict["applicants_count"] = stats[jid]["applicants"]
+        job_dict["shortlisted_count"] = stats[jid]["shortlisted"]
+        job_dict["hires_count"] = stats[jid]["hires"]
+        
+        # Ensure views_count doesn't return None
+        job_dict["views_count"] = getattr(job, "views_count", 0) or 0
+        
+        response_list.append(job_dict)
+
+    # FastAPI will perfectly map this list of dictionaries to List[JobResponse]
+    return response_list
 
 # --- CORE RECRUITMENT FLOW (ATS) ---
 @router.get("/jobs/{job_id}/applicants", response_model=List[dict])
