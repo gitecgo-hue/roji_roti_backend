@@ -109,23 +109,43 @@ class EmployeeSearchFilter(BaseModel):
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
     
+    # 1. Fetch all jobs belonging to this employer (Only need to do this ONCE!)
     my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     my_job_ids = [str(job.id) for job in my_jobs]
     
+    # 2. Calculate Active Jobs
     active_jobs = sum(1 for job in my_jobs if job.status == "published")
     
-    if my_job_ids:
-        total_apps = await JobApplication.find(
-            {"job_id": {"$in": my_job_ids}}
-        ).count()
-        
-        shortlisted = await JobApplication.find(
-            {"job_id": {"$in": my_job_ids}, "status": ApplicationStatus.SHORTLISTED}
-        ).count()
-    else:
-        total_apps = 0
-        shortlisted = 0
+    # 3. Calculate Total Applicants (using the fast method we just discovered)
+    total_applicants = sum(job.applicants_count for job in my_jobs if getattr(job, "applicants_count", 0))
 
+    # 4. Calculate Total Jobs Posted dynamically!
+    total_jobs_posted = len(my_jobs)
+    
+    # 5. SHORTLISTED COUNT
+    # Keep the IDs in their native format (don't convert to str!)
+    native_job_ids = [job.id for job in my_jobs]
+    
+    # 1st Attempt: Use the Enum
+    shortlisted = await JobApplication.find(
+        {"job_id": {"$in": native_job_ids}, "status": ApplicationStatus.SHORTLISTED}
+    ).count()
+    
+    # 2nd Attempt fallback: If the Enum fails, try the raw lowercase string
+    if shortlisted == 0:
+        shortlisted = await JobApplication.find(
+            {"job_id": {"$in": native_job_ids}, "status": "shortlisted"}
+        ).count()
+
+    if shortlisted == 0 and native_job_ids:
+        all_apps = await JobApplication.find({"job_id": {"$in": native_job_ids}}).to_list()
+
+    # 6. Calculate Total Contacts Unlocked dynamically!
+    total_contacts = await ContactUnlock.find(
+        ContactUnlock.employer_id == current_employer.id
+    ).count()
+
+    # 7. Calculate Subscription Days Left
     days_left = max(0, (sub.expiry_date - datetime.utcnow()).days) if sub.expiry_date else 0
     
     return EmployerDashboardResponse(
@@ -135,10 +155,10 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
         days_left=days_left,
         expiry_date=sub.expiry_date,
         active_jobs_count=active_jobs,
-        total_applicants_count=total_apps,
+        total_applicants_count=total_applicants,
         shortlisted_count=shortlisted,
-        job_posts_used=sub.jobs_posted, 
-        contacts_viewed=sub.contacts_checked
+        job_posts_used=total_jobs_posted, 
+        contacts_viewed=total_contacts 
     )
 
 # --- GET PERSONAL PROFILE ---

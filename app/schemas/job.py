@@ -1,14 +1,19 @@
-from pydantic import BaseModel, Field, model_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from beanie import PydanticObjectId
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
 # --- Model Imports ---
-from app.models.job import JobStatus, JobType
 from app.models.job import (
-    JobStatus, JobType, WorkLocationType, PayType, 
-    MinimumEducation, TotalExperience, SkillPreference, CommunicationPreference
+    JobStatus, 
+    JobTypeEnum, 
+    WorkLocationType, 
+    PayType, 
+    MinimumEducation, 
+    TotalExperience, 
+    SkillPreference, 
+    CommunicationPreference
 )
 
 # --- ENUMS & UTILITY SCHEMAS ---
@@ -73,10 +78,7 @@ class JobCreateRequest(BaseModel):
     # --- Candidate Requirements ---
     minimum_education: MinimumEducation = Field(..., title="Minimum education")
     total_experience_required: TotalExperience = Field(..., title="Total experience required")
-    skills_preference: Optional[List[SkillPreference]] = Field(
-        default_factory=list, 
-        title="Skills preference"
-    )
+    skills_preference: Optional[List[str]] = []
     
     # --- Interview & Contact ---
     is_walk_in_interview: bool = Field(
@@ -95,7 +97,7 @@ class JobCreateRequest(BaseModel):
     job_description: Optional[str] = Field(None, title="Job description")
     
     is_pan_india: bool = False
-    job_type: Optional[JobType] = JobType.FULL_TIME
+    job_type: Optional[JobTypeEnum] = None    
     is_urgent: bool = False
     status: JobStatus = JobStatus.DRAFT
 
@@ -130,6 +132,14 @@ class JobCreateRequest(BaseModel):
 
         return self
 
+    @field_validator('job_type', mode='before')
+    @classmethod
+    def normalize_job_type(cls, v):
+        if isinstance(v, str):
+            # Converts "Full-Time", "FULL_TIME", or "Full time" -> "full_time"
+            return v.lower().replace("-", "_").replace(" ", "_")
+        return v
+
 # --- RESPONSE & UPDATE SCHEMAS ---
 class JobResponse(JobCreateRequest):
     """Schema for sending the job data back to the frontend"""
@@ -149,7 +159,7 @@ class JobDashboardResponse(BaseModel):
     job_title: str
     location_name: Optional[str] = None
     status: JobStatus
-    job_type: Optional[JobType] = None
+    job_type: Optional[JobTypeEnum] = None
     posted_at: Optional[datetime] = None
     applied_count: int = 0
     database_matches: int = 0
@@ -174,8 +184,8 @@ class JobUpdateRequest(BaseModel):
     # --- Candidate Requirements ---
     minimum_education: Optional[MinimumEducation] = Field(None, title="Minimum education")
     total_experience_required: Optional[TotalExperience] = Field(None, title="Total experience required")
-    skills_preference: Optional[List[SkillPreference]] = Field(None, title="Skills preference")
-    
+    skills_preference: Optional[List[str]] = None    
+
     # --- Interview & Contact ---
     is_walk_in_interview: Optional[bool] = Field(None, title="Is this a walk-in interview?")
     address: Optional[str] = Field(None, title="Address")
@@ -185,7 +195,7 @@ class JobUpdateRequest(BaseModel):
     job_description: Optional[str] = Field(None, title="Job description")
     
     is_pan_india: Optional[bool] = None
-    job_type: Optional[JobType] = None
+    job_type: Optional[JobTypeEnum] = None
     is_urgent: Optional[bool] = None
     status: Optional[JobStatus] = None
     is_active: Optional[bool] = None  # Specific to updates (e.g., pausing a job)
@@ -223,6 +233,13 @@ class JobUpdateRequest(BaseModel):
             self.max_fixed_salary = None
 
         return self
+
+    @field_validator('job_type', mode='before')
+    @classmethod
+    def normalize_job_type(cls, v):
+        if isinstance(v, str):
+            return v.lower().replace("-", "_").replace(" ", "_")
+        return v
 
 class LocationInput(BaseModel):
     address_text: Optional[str] = None

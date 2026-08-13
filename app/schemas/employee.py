@@ -4,6 +4,8 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from beanie import PydanticObjectId
 
+from app.models.employee import WorkExperience, Education, Skill, Availability, GeoLocation
+
 # =====================================================================
 # API UPDATE SCHEMAS (Frontend Payloads)
 # =====================================================================
@@ -11,8 +13,8 @@ class EducationUpdate(BaseModel):
     institute: Optional[str] = None
     degree: Optional[str] = None          
     field_of_study: Optional[str] = None
-    start_year: Optional[str] = None
-    end_year: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
 
 class WorkExperienceUpdate(BaseModel):
     job_title: Optional[str] = None
@@ -25,10 +27,10 @@ class WorkExperienceUpdate(BaseModel):
 class EmployeeProfileUpdate(BaseModel):
     """Unified schema for updating the employee's full profile"""
     # --- Basic Details ---
-    full_name: Optional[str] = None
-    job_title: Optional[str] = None
+    name: Optional[str] = Field(None, alias="full_name")
+    title: Optional[str] = Field(None, alias="job_title")
     location: Optional[str] = None
-    about_you: Optional[str] = None
+    summary: Optional[str] = Field(None, alias="about_you")
 
     # --- Preferences ---
     expected_salary: Optional[float] = None
@@ -42,8 +44,8 @@ class EmployeeProfileUpdate(BaseModel):
     languages: Optional[List[str]] = None
 
     # --- Nested Lists ---
-    work_experience: Optional[List[WorkExperienceUpdate]] = None
-    education: Optional[List[EducationUpdate]] = None
+    work_experience: Optional[List[dict]] = None
+    education: Optional[List[dict]] = None
 
 # =====================================================================
 # OTHER SCHEMAS
@@ -136,7 +138,7 @@ class EmployeeDashboardResponse(BaseModel):
     is_available: bool
     total_unlocks: int
     location: str
-    daily_rate: Optional[float]
+    expected_salary: Optional[float]
     rating: float = 0.0
 
     model_config = ConfigDict(

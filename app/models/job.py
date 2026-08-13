@@ -16,7 +16,7 @@ class JobStatus(str, Enum):
     EXPIRED = "expired"
     CLOSED = "closed"
 
-class JobType(str, Enum):
+class JobTypeEnum(str, Enum):
     FULL_TIME = "full_time"
     PART_TIME = "part_time"
     CONTRACT = "contract"
@@ -99,7 +99,7 @@ class Job(TranslatableDocument):
     # --- Candidate Requirements ---
     minimum_education: MinimumEducation
     total_experience_required: TotalExperience
-    skills_preference: List[SkillPreference] = []
+    skills_preference: Optional[List[str]] = []
     
     # --- Interview & Contact ---
     is_walk_in_interview: bool
@@ -108,7 +108,7 @@ class Job(TranslatableDocument):
     
     # --- Descriptions & Settings ---
     job_description: Optional[str] = None
-    job_type: Optional[JobType] = JobType.FULL_TIME
+    job_type: Optional[JobTypeEnum] = JobTypeEnum.FULL_TIME
     
     # --- Status & Timestamps ---
     is_urgent: bool = False

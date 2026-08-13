@@ -16,6 +16,7 @@ from app.models.employer import Employer
 from app.models.employee import GeoLocation, Employee
 from app.models.application import JobApplication
 from app.models.base import TranslatableDocument
+from app.models.category import Category
 
 # --- Import Config ---
 from app.core.config import settings
@@ -89,6 +90,22 @@ async def create_job(
     current_employer: Employer = Depends(get_current_employer),
     lang: str = Depends(get_user_language) 
 ):
+
+    # AUTO-CREATE CATEGORY LOGIC
+    if job_data.job_category:
+        # Check if the category already exists in the database
+        existing_category = await Category.find_one(Category.name == job_data.job_category)
+        
+        # If it does not exist, create it immediately!
+        if not existing_category:
+            new_category = Category(
+                name=job_data.job_category,
+                description=f"All jobs related to {job_data.job_category}",
+                icon_url="",  # Leave blank or set a default generic icon URL here
+                is_active=True
+            )
+            await new_category.insert()
+    
     """
     Creates a new job posting for the logged-in employer.
     """

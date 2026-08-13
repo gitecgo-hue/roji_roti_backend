@@ -78,17 +78,36 @@ async def connect_to_mongo():
     # 4. Seed initial categories if the collection is empty
     category_count = await Category.find_all().count()
     if category_count == 0:
-        logger.info("Seeding initial categories...")
-        initial_categories = [
-            Category(name="Carpenter", description="Woodwork, furniture making, and repairs"),
-            Category(name="Plumber", description="Pipe installation, drainage, and leak repairs"),
-            Category(name="Electrician", description="Wiring, electrical maintenance, and installations"),
-            Category(name="Mason", description="Bricklaying, concrete work, and construction"),
-            Category(name="Driver", description="Commercial and private vehicle operation")
-        ]
-        # insert_many is faster for bulk operations
-        await Category.insert_many(initial_categories)
-        logger.info("Categories seeded successfully.")
+        logger.info("Scanning existing jobs for missing categories...")
+        
+        # Grab every unique category name currently used in the Job collection
+        # (Requires importing the Job model at the top of this file!)
+        used_job_categories = await Job.distinct("job_category")
+        
+        if used_job_categories:
+            # Fetch all existing categories from the database to compare
+            all_db_categories = await Category.find_all().to_list()
+            db_category_names = {cat.name for cat in all_db_categories}
+            
+            missing_categories = []
+            
+            for cat_name in used_job_categories:
+                # If an employer used a category that isn't in the DB yet, queue it up!
+                if cat_name and cat_name not in db_category_names:
+                    missing_categories.append(
+                        Category(
+                            name=cat_name,
+                            description=f"All jobs related to {cat_name}",
+                            is_active=True
+                        )
+                    )
+            
+            # Bulk insert the missing ones for maximum performance
+            if missing_categories:
+                await Category.insert_many(missing_categories)
+                logger.info(f"Auto-created {len(missing_categories)} new categories based on active job posts!")
+            else:
+                logger.info("All job categories are perfectly synced.")
 
 async def close_mongo_connection():
     logger.info("Closing MongoDB connection...")

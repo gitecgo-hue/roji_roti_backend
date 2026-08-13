@@ -1,5 +1,5 @@
 from beanie import Document, Indexed, PydanticObjectId
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl, field_validator
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, HttpUrl, field_validator, model_validator
 from typing import Optional, List, Dict, Any, Union, Annotated
 from datetime import datetime, timezone, date
 from enum import Enum
@@ -44,7 +44,7 @@ class WorkExperience(BaseModel):
     currently_working_here: Optional[bool] = None
 
 class Education(BaseModel):
-    institution: Optional[str] = Field(default="Not Specified", alias="institute")
+    institute: Optional[str] = None
     degree: Optional[str] = None
     field_of_study: Optional[str] = None
     start_year: Optional[int] = None
@@ -80,11 +80,11 @@ class ProfileMetadata(BaseModel):
 
 # FIXED: Moved these above EmployeeProfileUpdate to prevent NameError
 class EducationUpdate(BaseModel):
-    institution: Optional[str] = Field(default="Not Specified", alias="institute")
+    institute: Optional[str] = None
     degree: Optional[str] = None          
     field_of_study: Optional[str] = None 
-    start_year: Optional[str] = None
-    end_year: Optional[str] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
 
 class WorkExperienceUpdate(BaseModel):
     job_title: Optional[str] = None
@@ -94,12 +94,24 @@ class WorkExperienceUpdate(BaseModel):
     end_year: Optional[int] = None
     currently_working_here: Optional[bool] = None
 
+    @model_validator(mode='after')
+    def enforce_null_end_year(self):
+        """
+        If the user is currently working here, ensure the end_year is always null.
+        """
+        if self.currently_working_here:
+            self.end_year = None
+            
+        # If they ARE NOT working there anymore, force them to provide an end_year!
+        elif self.end_year is None:
+            raise ValueError("end_year is required if you are no longer working here")
+
 class EmployeeProfileUpdate(BaseModel):
     # --- Basic Details ---
-    full_name: Optional[str] = None
-    job_title: Optional[str] = None
+    name: Optional[str] = Field(None, alias="full_name")
+    title: Optional[str] = Field(None, alias="job_title")
     location: Optional[str] = None
-    about_you: Optional[str] = None
+    summary: Optional[str] = Field(None, alias="about_you")
 
     # --- Preferences ---
     expected_salary: Optional[float] = None
@@ -113,7 +125,7 @@ class EmployeeProfileUpdate(BaseModel):
     languages: Optional[List[str]] = None
 
     # --- Nested Lists ---
-    work_experience: Optional[List[WorkExperienceUpdate]] = None
+    work_experience: Optional[List[WorkExperienceUpdate]] = None 
     education: Optional[List[EducationUpdate]] = None
 
 # =====================================================================
@@ -174,6 +186,17 @@ class Employee(TranslatableDocument):
             "role",
             "status",
         ]
+
+    @field_validator('work_experience', 'education', mode='before')
+    @classmethod
+    def filter_nulls_from_arrays(cls, v):
+        """
+        Cleans up corrupted database arrays by removing null values
+        when fetching the document from MongoDB.
+        """
+        if isinstance(v, list):
+            return [item for item in v if item is not None]
+        return v
 
 # =====================================================================
 # JOB APPLICATION MODEL

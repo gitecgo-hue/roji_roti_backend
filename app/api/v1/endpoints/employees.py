@@ -1,5 +1,6 @@
 # --- IMPORTS ---
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response, BackgroundTasks
+from concurrent.futures import wait
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
 from typing import List, Optional, Dict, Any, Union
@@ -88,9 +89,12 @@ class LocationInput(BaseModel):
     longitude: float
 
 class WorkExperienceInput(BaseModel):
-    job_title: str
+    job_title: Optional[str] = None
+    job_role: Optional[str] = None
     company_name: Optional[str] = None
-    duration_months: Optional[int] = None
+    start_year: Optional[int] = None
+    end_year: Optional[int] = None
+    currently_working_here: Optional[bool] = None
 
 # --- Employee Dashboard & Stats ---
 @router.get("/dashboard", response_model=EmployeeDashboardResponse)
@@ -124,7 +128,7 @@ async def get_employee_dashboard(
         is_available=is_available,
         total_unlocks=unlock_count,
         location=location_display,
-        daily_rate=daily_rate,
+        expected_salary=daily_rate,
         rating=getattr(current_employee, "rating", 0.0)
     )
 
@@ -175,34 +179,30 @@ def parse_salary_string(salary_input: Union[str, Dict[str, Any], int, float, Any
 #--- Profile Update ---
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
+    request: Request,
     profile_data: EmployeeProfileUpdate,
-    background_tasks: BackgroundTasks, # Added for translation
-    current_employee: Employee = Depends(get_current_employee)
+    background_tasks: BackgroundTasks,
+    current_employee: Employee = Depends(get_current_employee),
 ):
-    """
-    Unified endpoint to update or complete an employee profile.
-    - Auto-geocodes locations via Ola Maps.
-    - Safely maps flat frontend fields to rich database nested objects.
-    - Triggers translation & webhooks in the background.
-    """
-    update_dict = profile_data.model_dump(exclude_unset=True)
-    
-    if not update_dict:
+    # 2. GRAB THE RAW JSON (Bypassing Pydantic completely!)
+    raw_payload = await request.json()
+
+    # by_alias=False automatically converts 'full_name' to 'name', 'job_title' to 'title', etc.
+    update_dict = profile_data.model_dump(exclude_unset=True, by_alias=False)
+
+    if not raw_payload:
         return {
             "status": "success", 
             "message": "No changes were provided.",
             "updated_fields": []
         }
-
+    
     # ==========================================
     # 2. OLA MAPS AUTO-GEOCODING & LOCATION
     # ==========================================
-    # The frontend payload sends the city string as "location"
     if "location" in update_dict and isinstance(update_dict["location"], str):
         city_name = update_dict["location"]
-        
         try:
-            # Try to get coordinates for the rich GeoLocation object
             coords = await MapService.get_coordinates(city_name)
             if coords:
                 current_employee.location = GeoLocation(
@@ -210,41 +210,30 @@ async def update_employee_profile(
                     coordinates=[coords["longitude"], coords["latitude"]],
                     city=city_name
                 )
-                # Save the formatted address or fallback to the typed name
                 current_employee.location_name = coords.get("formatted_address", city_name)
             else:
-                # Fallback if map service returns nothing
                 current_employee.location_name = city_name
         except Exception:
-            # Fallback if map service is down
             current_employee.location_name = city_name
             
-        # Remove 'location' from update_dict so the basic field mapper below doesn't get confused
         del update_dict["location"]
 
     # ==========================================
-    # 3. DIRECT FIELD MAPPING
+    # 3. DIRECT FIELD MAPPING (FIXED)
     # ==========================================
     if update_dict.get("email") and update_dict["email"] != getattr(current_employee, "email", None):
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
-    field_mapping = {
-        "full_name": "name",
-        "job_title": "title",
-        "about_you": "summary",
-        "phone": "phone",
-        "languages": "languages",
-        "current_salary": "current_salary",
-        "age": "age",
-        "gender": "gender",
-        "referred_by_id": "referred_by_id",
-        "total_experience": "total_experience"
-    }
+    # Since Pydantic already converted the aliases, we just look for the real database keys!
+    direct_fields = [
+        "name", "title", "summary", "phone", "languages", 
+        "expected_salary", "age", "gender", "referred_by_id", "total_experience"
+    ]
     
-    for flat_field, db_field in field_mapping.items():
-        if flat_field in update_dict:
-            setattr(current_employee, db_field, update_dict[flat_field])
+    for field in direct_fields:
+        if field in update_dict:
+            setattr(current_employee, field, update_dict[field])
 
     # ==========================================
     # 4. COMPLEX NESTED OBJECT MAPPING
@@ -264,7 +253,6 @@ async def update_employee_profile(
             
             job_types = set(current_employee.preferences.job_types or [])
             
-            # FIXED: Safely check if preferred_job_types exists and is not None
             if update_dict.get("preferred_job_types"):
                 job_types = set(update_dict["preferred_job_types"])
                 
@@ -273,7 +261,6 @@ async def update_employee_profile(
             if update_dict.get("preferred_roles"):
                 job_types.update(update_dict["preferred_roles"])
             
-            # Filter out empty values and Swagger's dummy "string"
             current_employee.preferences.job_types = [
                 jt for jt in list(job_types) if jt and jt.lower() != "string"
             ]
@@ -287,105 +274,107 @@ async def update_employee_profile(
             if "remote_work" in update_dict:
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
-        # --- Salary Expectations ---        
-        if "expected_salary" in update_dict:
-            parsed_amount = parse_salary_string(update_dict["expected_salary"])
-            if parsed_amount is not None:
-                current_employee.expected_salary = parsed_amount
 
         # --- Arrays (Skills, Education, Work Experience) ---
-        if update_dict.get("skills"):
-            current_employee.skills = [Skill(name=skill_name) for skill_name in update_dict["skills"]]
+        # 4. ARRAYS (DIRECT MONGODB BYPASS)
+        db_force_updates = {}
 
-        # FIXED: Safely check for both Pydantic's standard DB keys AND the raw frontend keys
-        if "education" in update_dict:
-            new_education = []
-            for edu in update_dict["education"]:
-                if isinstance(edu, dict):
-                    inst_name = edu.get("institute")
-                    deg_val = edu.get("degree")
-                    field_val = edu.get("field_of_study")
-                    
-                    sy_val = edu.get("start_year")
-                    start_yr = int(sy_val) if str(sy_val or "").isdigit() else None
-                    
-                    ey_val = edu.get("end_year")
-                    end_yr = int(ey_val) if str(ey_val or "").isdigit() else None
+        # --- Skills ---
+        if profile_data.skills is not None:
+            current_employee.skills = [Skill(name=skill) for skill in profile_data.skills]
+            db_force_updates["skills"] = [{"name": skill} for skill in profile_data.skills]
 
-                    new_education.append(
-                        Education(
-                            institute=inst_name,
-                            degree=deg_val,
-                            field_of_study=field_val,
-                            start_year=start_yr,
-                            end_year=end_yr
-                        )
-                    )
-                else:
-                    # If Pydantic already converted it to an object perfectly, just append it
-                    new_education.append(edu)
-                    
-            current_employee.education = new_education
+        # --- Education ---
+        if profile_data.education is not None:
+            edu_dicts = []
+            for edu in profile_data.education:
+                if edu is None: continue
+                edu_dicts.append({
+                    "institute": edu.institute,
+                    "degree": edu.degree,
+                    "field_of_study": edu.field_of_study,
+                    "start_year": edu.start_year,
+                    "end_year": edu.end_year
+                })
+            # Update local object
+            current_employee.education = [Education(**d) for d in edu_dicts]
+            # Stage for forced DB update
+            db_force_updates["education"] = edu_dicts
 
-        # FIXED: Matched exact DB schema keys (company_name, job_title) so they don't save as null
-        if "work_experience" in update_dict:
-            new_exp = []
-            for exp in update_dict["work_experience"]:
-                if isinstance(exp, dict):
-                    # Map possible frontend keys to the DB model fields
-                    jt = exp.get("job_title") or exp.get("title") or exp.get("job")
-                    jr = exp.get("job_role") or exp.get("role")
-                    cn = exp.get("company_name") or exp.get("company") or exp.get("employer")
-                    sy = exp.get("start_year") or exp.get("start")
-                    ey = exp.get("end_year") or exp.get("end")
-                    currently = exp.get("currently_working_here") if "currently_working_here" in exp else exp.get("currently")
-
-                    # Safely coerce years to ints when possible
-                    try:
-                        sy_val = int(sy) if sy is not None and str(sy).isdigit() else None
-                    except Exception:
-                        sy_val = None
-                    try:
-                        ey_val = int(ey) if ey is not None and str(ey).isdigit() else None
-                    except Exception:
-                        ey_val = None
-
-                    new_exp.append(
-                        WorkExperience(
-                            job_title=jt,
-                            job_role=jr,
-                            company_name=cn,
-                            start_year=sy_val,
-                            end_year=ey_val,
-                            currently_working_here=bool(currently) if currently is not None else None
-                        )
-                    )
-            current_employee.work_experience = new_exp
-            
-        # ==========================================
-        # 5. METADATA & SAVING
-        # ==========================================
-        # Force the updated_at timestamp to refresh right before saving
-        if not current_employee.metadata:
-            current_employee.metadata = ProfileMetadata()
-        current_employee.metadata.updated_at = datetime.now(timezone.utc)
-        
-        # Calculate Profile Completion %
-        if getattr(current_employee, "name", None) and getattr(current_employee, "skills", None):
-            current_employee.metadata.profile_completion = 100
-            
-        await current_employee.save()
-        
     except ValidationError as e:
-        raise HTTPException(status_code=422, detail=f"Data format error. Please check your inputs: {e.errors()}")
+            raise HTTPException(status_code=422, detail=f"Data format error. Please check your inputs: {e.errors()}")
+
+        # --- Work Experience ---
+        # ==========================================
+        # 4. AGGRESSIVE WORK EXPERIENCE PARSER
+        # ==========================================
+    db_force_updates = {}
+
+    # --- Read Work Experience Directly from RAW JSON ---
+    if "work_experience" in raw_payload:
+        raw_exp_list = raw_payload["work_experience"]        
+        exp_dicts = []
+        for exp in raw_exp_list:
+            if not exp or not isinstance(exp, dict): 
+                continue
+                
+            exp_dicts.append({
+                "job_title": exp.get("job_title"),
+                "job_role": exp.get("job_role"),
+                "company_name": exp.get("company_name"),
+                "start_year": exp.get("start_year"),
+                "end_year": exp.get("end_year"),
+                "currently_working_here": exp.get("currently_working_here")
+            })
+            
+        # Update local object so it returns in the response
+        current_employee.work_experience = [WorkExperience(**d) for d in exp_dicts]
+        # Stage for pure MongoDB override
+        db_force_updates["work_experience"] = exp_dicts
+
+
+    # --- Read Education Directly from RAW JSON ---
+    if "education" in raw_payload:
+        raw_edu_list = raw_payload["education"]
+        
+        edu_dicts = []
+        for edu in raw_edu_list:
+            if not edu or not isinstance(edu, dict): 
+                continue
+                
+            edu_dicts.append({
+                "institute": edu.get("institute"),
+                "degree": edu.get("degree"),
+                "field_of_study": edu.get("field_of_study"),
+                "start_year": edu.get("start_year"),
+                "end_year": edu.get("end_year")
+            })
+            
+        current_employee.education = [Education(**d) for d in edu_dicts]
+        db_force_updates["education"] = edu_dicts
+
+    # ==========================================
+    # 5. METADATA & SAVING
+    # ==========================================
+    if not current_employee.metadata:
+        current_employee.metadata = ProfileMetadata()
+    current_employee.metadata.updated_at = datetime.now(timezone.utc)
+    
+    # 1. Save standard fields normally
+    await current_employee.save()
+    
+    # 2. FORCE MongoDB to overwrite the arrays using the raw driver
+    if db_force_updates:
+        await Employee.get_motor_collection().update_one(
+            {"_id": current_employee.id},
+            {"$set": db_force_updates}
+        )
 
     # ==========================================
     # 6. TRANSLATION & WEBHOOK TRIGGERS
     # ==========================================
-    # Check if translatable text fields were modified
     translatable_db_fields = ["name", "title", "summary"]
-    fields_to_translate = [db_field for flat_field, db_field in field_mapping.items() 
-                           if flat_field in update_dict and db_field in translatable_db_fields]
+    fields_to_translate = [field for field in update_dict.keys() if field in translatable_db_fields]
     
     if fields_to_translate:
         background_tasks.add_task(
@@ -402,7 +391,7 @@ async def update_employee_profile(
         "location": getattr(current_employee, "location_name", "Unspecified"),
         "updated_fields": list(update_dict.keys())
     })
-    
+
     return {
         "status": "success",
         "message": "Profile updated successfully!",
