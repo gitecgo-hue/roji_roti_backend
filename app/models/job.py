@@ -50,6 +50,11 @@ class TotalExperience(str, Enum):
     THREE_TO_FIVE = "3-5"
     FIVE_TO_SEVEN = "5+"
 
+    # --- Legacy Values  ---
+    # These prevent the app from crashing when reading older job posts from MongoDB
+    EXPERIENCED_ONLY = "Experienced Only"
+    FRESHER_ONLY = "Fresher Only"
+
 class SkillPreference(str, Enum):
     FLEXIBLE_WORKING_HOURS = "Flexible Working Hours"
     WEEKLY_PAYOUT = "Weekly Payout"
