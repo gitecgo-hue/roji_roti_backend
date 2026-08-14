@@ -412,8 +412,8 @@ async def update_profile_photo(
     current_employee: Employee = Depends(get_current_employee)
 ):
     """
-    Uploads a profile picture to Cloudinary, updates the employee's record,
-    and returns the URL for the frontend to display.
+    Uploads a profile picture to Cloudinary, deletes the old one (if it exists),
+    updates the employee's record, and returns the URL for the frontend to display.
     """
     allowed_types = ["image/jpeg", "image/png", "image/webp"]
     if file.content_type not in allowed_types:
@@ -433,36 +433,104 @@ async def update_profile_photo(
         )
 
     try:
-        url = await upload_file(file, folder_name="employees")
+        # 1. UPLOAD THE NEW PHOTO FIRST (Protects the user if the upload crashes)
+        new_url = await upload_file(file, folder_name="employees")
         
-        # Standardized to 'profile_picture_url' to match the delete endpoint
-        current_employee.profile_picture_url = url
+        # 2. SAFELY DELETE THE OLD PHOTO FROM CLOUDINARY
+        old_url = getattr(current_employee, "profile_picture_url", None)
+        if old_url:
+            try:
+                upload_str = "/upload/"
+                if upload_str in old_url:
+                    after_upload = old_url.split(upload_str)[1]
+                    parts = after_upload.split('/')
+                    
+                    if parts[0].startswith('v') and parts[0][1:].isdigit():
+                        parts.pop(0) 
+                    
+                    public_id = "/".join(parts).rsplit('.', 1)[0]
+                    cloudinary.uploader.destroy(public_id)
+            except Exception as e:
+                # We catch the error but don't crash the API. 
+                # The user still gets their new photo even if the old one fails to delete.
+                print(f"Warning: Failed to delete old Cloudinary image: {str(e)}")
+        
+        # 3. SAVE THE NEW URL TO THE DATABASE
+        current_employee.profile_picture_url = new_url
+        
+        # 4. RECALCULATE SCORE & TIMESTAMPS
+        if not current_employee.metadata:
+            current_employee.metadata = ProfileMetadata()
+            
+        current_employee.metadata.profile_completion = calculate_profile_completion(current_employee)
+        current_employee.metadata.updated_at = datetime.now(timezone.utc)
+        
         await current_employee.save()
         
-        # Now returns the URL directly to the frontend
         return {
             "message": "Profile photo updated successfully", 
-            "profile_picture_url": url
+            "profile_picture_url": new_url,
+            "new_profile_score": current_employee.metadata.profile_completion
         }
         
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 # --- Profile Photo Deletion ---
-@router.delete("/profile_photo_delete", status_code=status.HTTP_200_OK)
-async def delete_employee_profile_picture(current_employee = Depends(get_current_employee)):
+@router.delete("/profile_photo_delete", response_model=dict)
+async def delete_profile_picture(current_employee: Employee = Depends(get_current_employee)):
+    # 1. Check if the user even has a picture
     if not current_employee.profile_picture_url:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You do not have a profile picture to delete.")
+        return {
+            "status": "success", 
+            "message": "No profile picture to delete."
+        }
 
-    deletion_successful = await delete_file(current_employee.profile_picture_url)
+    url = current_employee.profile_picture_url
 
-    if not deletion_successful:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete the image from the cloud provider.")
+    try:
+        # 2. BULLETPROOF CLOUDINARY PUBLIC_ID EXTRACTION
+        # This safely handles the URL whether it has a 'v12345' version number or not
+        upload_str = "/upload/"
+        if upload_str in url:
+            after_upload = url.split(upload_str)[1] # Gets "v1786628218/employees/w89gjhp9..."
+            
+            parts = after_upload.split('/')
+            # If the first part is a version number (starts with 'v' and is a number), remove it
+            if parts[0].startswith('v') and parts[0][1:].isdigit():
+                parts.pop(0) 
+            
+            # Rejoin the folder and filename, then strip the extension (.jpg, .png)
+            public_id_with_ext = "/".join(parts)
+            public_id = public_id_with_ext.rsplit('.', 1)[0]
+            
+            # 3. PERMANENTLY DELETE FROM CLOUDINARY SERVERS
+            delete_response = cloudinary.uploader.destroy(public_id)
+            
+            # If result is 'not found', it was already deleted manually on Cloudinary, which is fine!
+            if delete_response.get('result') not in ['ok', 'not found']:
+                raise Exception(f"Cloudinary rejected the request: {delete_response}")
+                
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to delete the image from Cloudinary. Error: {str(e)}"
+        )
 
+    # 4. REMOVE FROM MONGODB & RECALCULATE SCORE
     current_employee.profile_picture_url = None
+    
+    # Since we removed a photo, we must recalculate their profile completion score!
+    current_employee.metadata.profile_completion = calculate_profile_completion(current_employee)
+    current_employee.metadata.updated_at = datetime.now(timezone.utc)
+    
     await current_employee.save()
 
-    return {"message": "Profile picture deleted successfully."}
+    return {
+        "status": "success", 
+        "message": "Profile picture successfully deleted from Cloudinary and database.",
+        "new_profile_score": current_employee.metadata.profile_completion
+    }
 
 # --- Profile Updates ---
 # --- STEP 1: Request OTP for new phone number ---
@@ -488,6 +556,8 @@ async def send_phone_update_otp(
 
     # 3. Generate a 4-digit OTP (Changed from 100000, 999999)
     otp_code = str(random.randint(1000, 9999))
+
+    print(f"DEBUG: Generated OTP for {clean_new_phone}: {otp_code}")
     
     # 4. Save it to the database
     otp_record = await OTP.find_one({"phone": clean_new_phone})
@@ -495,7 +565,7 @@ async def send_phone_update_otp(
         otp_record.code = otp_code
         await otp_record.save()
     else:
-        await OTP(phone=clean_new_phone, code=otp_code).insert()
+        await OTP(phone=clean_new_phone, code=otp_code, user_type="employee").insert()
         
     # 5. Send the SMS using your SMS service (Uncomment when ready)
     # await SmsService.send_otp(clean_new_phone, otp_code)
@@ -540,7 +610,7 @@ async def update_employee_phone(
     await current_employee.save()
 
     # 5. Generate a fresh token with the new phone number
-    new_access_token = create_access_token(data={"sub": current_employee.phone})
+    new_access_token = create_access_token({"sub": current_employee.phone}, user_type="employee")
 
     return {
         "status": "success", 
