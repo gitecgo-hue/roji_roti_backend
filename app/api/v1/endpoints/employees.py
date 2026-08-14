@@ -1,12 +1,13 @@
 # --- IMPORTS ---
 from concurrent.futures import wait
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, Response, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, ValidationError
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, date, timezone
 from bson import ObjectId
 from beanie import PydanticObjectId
+import cloudinary.uploader
 import random
 import re
 
@@ -25,11 +26,15 @@ from app.api.dependencies import (
 
 # --- Schema Imports ---
 from app.schemas.employee import (
+    EmployeeCreate,
+    EmployeeResponse,
     EmployeeProfileUpdate,
-    EmployeeResponse, 
-    AvailabilityUpdate,
     EmployeeDashboardResponse,
     WorkExperienceInput,
+    SkillInput,
+    EducationUpdate,
+    WorkExperienceUpdate,
+    AvailabilityUpdate,
     AppliedJobResponse,
     SavedJobResponse
 )
@@ -176,6 +181,28 @@ def parse_salary_string(salary_input: Union[str, Dict[str, Any], int, float, Any
 
     return None
 
+# --- Profile Completion Score Calculation ---
+def calculate_profile_completion(employee: Employee) -> int:
+    score = 0
+    
+    # Core Identity (40 points)
+    if getattr(employee, "name", None): score += 10
+    if getattr(employee, "title", None): score += 10
+    if getattr(employee, "summary", None): score += 10
+    if getattr(employee, "location_name", None): score += 10
+    
+    # Contact & Media (20 points)
+    if getattr(employee, "email", None): score += 10
+    if getattr(employee, "profile_picture_url", None): score += 10
+    
+    # Professional Details (40 points)
+    if getattr(employee, "skills", None) and len(employee.skills) > 0: score += 10
+    if getattr(employee, "work_experience", None) and len(employee.work_experience) > 0: score += 10
+    if getattr(employee, "education", None) and len(employee.education) > 0: score += 10
+    if getattr(employee, "resume_url", None): score += 10
+
+    return min(score, 100)
+
 #--- Profile Update ---
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
@@ -184,7 +211,7 @@ async def update_employee_profile(
     background_tasks: BackgroundTasks,
     current_employee: Employee = Depends(get_current_employee),
 ):
-    # 2. GRAB THE RAW JSON (Bypassing Pydantic completely!)
+    # GRAB THE RAW JSON (Bypassing Pydantic completely!)
     raw_payload = await request.json()
 
     # by_alias=False automatically converts 'full_name' to 'name', 'job_title' to 'title', etc.
@@ -201,31 +228,55 @@ async def update_employee_profile(
     # 2. OLA MAPS AUTO-GEOCODING & LOCATION
     # ==========================================
     if "location" in update_dict and isinstance(update_dict["location"], str):
-        city_name = update_dict["location"]
+        raw_loc = update_dict["location"].strip()
+        
         try:
-            coords = await MapService.get_coordinates(city_name)
+            # 1. Ask MapService for the coordinates
+            coords = await MapService.get_coordinates(raw_loc)
+            
+            # 2. Get the address string (prefer the Map API's detailed address if available)
+            if coords and coords.get("formatted_address"):
+                best_address = coords["formatted_address"]
+            else:
+                best_address = raw_loc
+                
+            # 3. Clean up the Map API's mess (Deduplicate the words)
+            # This turns "Indore, MP, India, MP, India" back into "Indore, MP, India"
+            seen = set()
+            parts = []
+            for p in best_address.split(","):
+                p_clean = p.strip()
+                if p_clean and p_clean not in seen:
+                    seen.add(p_clean)
+                    parts.append(p_clean)
+                    
+            final_location_name = ", ".join(parts)
+            
+            # 4. Save the perfectly cleaned string
+            current_employee.location_name = final_location_name
+            
             if coords:
+                # 5. Extract City, State, Country from the cleaned Map API result!
                 current_employee.location = GeoLocation(
                     type="Point",
                     coordinates=[coords["longitude"], coords["latitude"]],
-                    city=city_name
+                    city=parts[0] if len(parts) > 0 else None,
+                    state=parts[1] if len(parts) > 1 else None,
+                    country=parts[2] if len(parts) > 2 else None
                 )
-                current_employee.location_name = coords.get("formatted_address", city_name)
-            else:
-                current_employee.location_name = city_name
         except Exception:
-            current_employee.location_name = city_name
+            # Fallback if MapService crashes completely
+            current_employee.location_name = raw_loc
             
         del update_dict["location"]
 
     # ==========================================
-    # 3. DIRECT FIELD MAPPING (FIXED)
+    # 3. DIRECT FIELD MAPPING
     # ==========================================
     if update_dict.get("email") and update_dict["email"] != getattr(current_employee, "email", None):
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
-    # Since Pydantic already converted the aliases, we just look for the real database keys!
     direct_fields = [
         "name", "title", "summary", "phone", "languages", 
         "expected_salary", "age", "gender", "referred_by_id", "total_experience"
@@ -238,6 +289,8 @@ async def update_employee_profile(
     # ==========================================
     # 4. COMPLEX NESTED OBJECT MAPPING
     # ==========================================
+    db_force_updates = {} # Dictionary to store aggressive overrides
+
     try:
         # --- Availability & Preferences ---
         if "notice_period_days" in update_dict:
@@ -274,97 +327,44 @@ async def update_employee_profile(
             if "remote_work" in update_dict:
                 current_employee.preferences.remote_ok = update_dict["remote_work"]
 
+        # --- Arrays (Direct override to prevent ghost appending) ---
+        if "skills" in raw_payload:
+            # Overwrites entirely. If user sends [], it deletes all old skills.
+            skills_list = raw_payload["skills"]
+            current_employee.skills = [Skill(name=skill) for skill in skills_list if isinstance(skill, str)]
+            db_force_updates["skills"] = [{"name": skill} for skill in skills_list if isinstance(skill, str)]
 
-        # --- Arrays (Skills, Education, Work Experience) ---
-        # 4. ARRAYS (DIRECT MONGODB BYPASS)
-        db_force_updates = {}
-
-        # --- Skills ---
-        if profile_data.skills is not None:
-            current_employee.skills = [Skill(name=skill) for skill in profile_data.skills]
-            db_force_updates["skills"] = [{"name": skill} for skill in profile_data.skills]
-
-        # --- Education ---
-        if profile_data.education is not None:
-            edu_dicts = []
-            for edu in profile_data.education:
-                if edu is None: continue
-                edu_dicts.append({
-                    "institute": edu.institute,
-                    "degree": edu.degree,
-                    "field_of_study": edu.field_of_study,
-                    "start_year": edu.start_year,
-                    "end_year": edu.end_year
-                })
-            # Update local object
+        if "education" in raw_payload:
+            edu_dicts = [e for e in raw_payload["education"] if e and isinstance(e, dict)]
             current_employee.education = [Education(**d) for d in edu_dicts]
-            # Stage for forced DB update
             db_force_updates["education"] = edu_dicts
 
+        if "work_experience" in raw_payload:
+            exp_dicts = [e for e in raw_payload["work_experience"] if e and isinstance(e, dict)]
+            current_employee.work_experience = [WorkExperience(**d) for d in exp_dicts]
+            db_force_updates["work_experience"] = exp_dicts
+
     except ValidationError as e:
-            raise HTTPException(status_code=422, detail=f"Data format error. Please check your inputs: {e.errors()}")
-
-        # --- Work Experience ---
-        # ==========================================
-        # 4. AGGRESSIVE WORK EXPERIENCE PARSER
-        # ==========================================
-    db_force_updates = {}
-
-    # --- Read Work Experience Directly from RAW JSON ---
-    if "work_experience" in raw_payload:
-        raw_exp_list = raw_payload["work_experience"]        
-        exp_dicts = []
-        for exp in raw_exp_list:
-            if not exp or not isinstance(exp, dict): 
-                continue
-                
-            exp_dicts.append({
-                "job_title": exp.get("job_title"),
-                "job_role": exp.get("job_role"),
-                "company_name": exp.get("company_name"),
-                "start_year": exp.get("start_year"),
-                "end_year": exp.get("end_year"),
-                "currently_working_here": exp.get("currently_working_here")
-            })
-            
-        # Update local object so it returns in the response
-        current_employee.work_experience = [WorkExperience(**d) for d in exp_dicts]
-        # Stage for pure MongoDB override
-        db_force_updates["work_experience"] = exp_dicts
-
-
-    # --- Read Education Directly from RAW JSON ---
-    if "education" in raw_payload:
-        raw_edu_list = raw_payload["education"]
-        
-        edu_dicts = []
-        for edu in raw_edu_list:
-            if not edu or not isinstance(edu, dict): 
-                continue
-                
-            edu_dicts.append({
-                "institute": edu.get("institute"),
-                "degree": edu.get("degree"),
-                "field_of_study": edu.get("field_of_study"),
-                "start_year": edu.get("start_year"),
-                "end_year": edu.get("end_year")
-            })
-            
-        current_employee.education = [Education(**d) for d in edu_dicts]
-        db_force_updates["education"] = edu_dicts
+        raise HTTPException(status_code=422, detail=f"Data format error. Please check your inputs: {e.errors()}")
 
     # ==========================================
-    # 5. METADATA & SAVING
+    # 5. METADATA & SAVING (INTEGRATED HELPER)
     # ==========================================
     if not current_employee.metadata:
         current_employee.metadata = ProfileMetadata()
+        
     current_employee.metadata.updated_at = datetime.now(timezone.utc)
     
-    # 1. Save standard fields normally
+    # Dynamically calculate the score based on the newly mapped object
+    current_employee.metadata.profile_completion = calculate_profile_completion(current_employee)
+    
+    # 1. Save standard fields and metadata normally
     await current_employee.save()
     
     # 2. FORCE MongoDB to overwrite the arrays using the raw driver
+    # Also aggressively save the calculated score just in case Pydantic misses it
     if db_force_updates:
+        db_force_updates["metadata.profile_completion"] = current_employee.metadata.profile_completion
         await Employee.get_motor_collection().update_one(
             {"_id": current_employee.id},
             {"$set": db_force_updates}
@@ -401,7 +401,7 @@ async def update_employee_profile(
             "job_types": getattr(current_employee.preferences, "job_types", []) if current_employee.preferences else [],
             "skills_count": len(current_employee.skills or []),
             "experience_entries": len(current_employee.work_experience or []),
-            "is_profile_complete": bool(getattr(current_employee, "name", None) and getattr(current_employee, "skills", None))
+            "is_profile_complete": current_employee.metadata.profile_completion == 100
         }
     }
 
@@ -653,40 +653,59 @@ async def upload_and_parse_resume(
 
 # --- Resume Download ---
 @router.get("/resume/download/{employee_id}")
-async def download_employee_resume(
+async def get_employee_resume_link(
     employee_id: str, 
     current_user = Depends(get_any_current_user)
 ):
     # 1. Authorization and Quota Checks
     if current_user.role == "employee":
         if str(current_user.id) != employee_id:
-            raise HTTPException(status_code=403, detail="You do not have permission to download this resume.")
+            raise HTTPException(status_code=403, detail="You do not have permission to view this resume.")
     elif current_user.role == "employer":
         await SubscriptionService.check_quota(str(current_user.id), "download_resume")
     else:
         raise HTTPException(status_code=403, detail="Unauthorized role.")
 
     # 2. Fetch Employee
+    from bson import ObjectId
     employee = await Employee.get(ObjectId(employee_id))
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found.")
 
-    # 3. If they uploaded a custom resume, redirect them to the inline Cloudinary URL
-    if getattr(employee, "resume_url", None):
-        return RedirectResponse(url=employee.resume_url)
+    # 3. Generate & Upload if no resume exists
+    if not getattr(employee, "resume_url", None):
         
-    # 4. If no custom resume exists, generate one on the fly
-    pdf_content = ResumeService.generate_pdf(employee)
-    employee_name = getattr(employee, "name", "Candidate") or "Candidate"
-    safe_name = "".join([c for c in employee_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-    
-    # 5. Return the dynamically generated PDF inline
-    return Response(
-        content=pdf_content.getvalue(),
-        media_type="application/pdf",
-        # CHANGED "attachment" to "inline" so it opens in the browser!
-        headers={"Content-Disposition": f'inline; filename="{safe_name}_Resume.pdf"'}
-    )
+        # A. Generate PDF on the fly
+        pdf_content = ResumeService.generate_pdf(employee)
+        employee_name = getattr(employee, "name", "Candidate") or "Candidate"
+        safe_name = "".join([c for c in employee_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+        
+        try:
+            # B. Upload the raw bytes to Cloudinary
+            upload_result = cloudinary.uploader.upload(
+                pdf_content.getvalue(), 
+                resource_type="raw", 
+                public_id=f"resumes/{employee_id}_{safe_name}",
+                format="pdf"
+            )
+            
+            # C. Save the new Cloudinary URL permanently to the database
+            employee.resume_url = upload_result.get("secure_url")
+            await employee.save()
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to upload auto-generated resume to cloud storage.")
+
+    # 4. Consume the Quota! (Only executed if a URL exists or was successfully created)
+    if current_user.role == "employer":
+        await SubscriptionService.increment_usage(str(current_user.id), "download_resume")
+
+    # 5. Return the URL in a JSON response
+    return {
+        "status": "success",
+        "message": "Resume is ready.",
+        "resume_url": employee.resume_url
+    }
 
 # --- Status & Visibility ---
 @router.patch("/availability", status_code=status.HTTP_200_OK)

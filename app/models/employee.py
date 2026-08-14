@@ -39,8 +39,8 @@ class WorkExperience(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     currently_working_here: Optional[bool] = None
 
 class Education(BaseModel):
@@ -90,21 +90,21 @@ class WorkExperienceUpdate(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     currently_working_here: Optional[bool] = None
 
     @model_validator(mode='after')
-    def enforce_null_end_year(self):
+    def enforce_null_end_date(self):
         """
-        If the user is currently working here, ensure the end_year is always null.
+        If the user is currently working here, ensure the end_date is always null.
         """
         if self.currently_working_here:
-            self.end_year = None
+            self.end_date = None
             
-        # If they ARE NOT working there anymore, force them to provide an end_year!
-        elif self.end_year is None:
-            raise ValueError("end_year is required if you are no longer working here")
+        # If they ARE NOT working there anymore, force them to provide an end_date!
+        elif self.end_date is None:
+            raise ValueError("end_date is required if you are no longer working here")
 
 class EmployeeProfileUpdate(BaseModel):
     # --- Basic Details ---

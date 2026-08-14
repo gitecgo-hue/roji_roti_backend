@@ -13,15 +13,15 @@ class EducationUpdate(BaseModel):
     institute: Optional[str] = None
     degree: Optional[str] = None          
     field_of_study: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
+    start_year: Optional[str] = None
+    end_year: Optional[str] = None
 
 class WorkExperienceUpdate(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     currently_working_here: Optional[bool] = None
 
 class EmployeeProfileUpdate(BaseModel):
@@ -149,8 +149,8 @@ class WorkExperienceInput(BaseModel):
     job_title: Optional[str] = None
     job_role: Optional[str] = None
     company_name: Optional[str] = None
-    start_year: Optional[int] = None
-    end_year: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     currently_working_here: Optional[bool] = None
 
 class SkillInput(BaseModel):
