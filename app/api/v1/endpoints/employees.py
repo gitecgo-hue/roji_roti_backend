@@ -783,13 +783,21 @@ async def update_availability_status(
     data: AvailabilityUpdate,
     current_employee: Employee = Depends(get_current_employee)
 ):
-    current_employee.availability_status = data.is_available
+    # 1. Check if the availability object exists, if not, create it
+    if not current_employee.availability:
+        from app.models.employee import Availability # Make sure this is imported at the top of your file
+        current_employee.availability = Availability()
+        
+    # 2. Assign the value to the correct nested field
+    current_employee.availability.is_available = data.is_available
+
     await current_employee.save()
     status_label = "Available" if data.is_available else "Not Available" 
     
     return {
-        "message": f"Your status has been updated to {status_label}.",
-        "availability_status": current_employee.availability_status
+        "status": "success",
+        "message": "Availability updated successfully",
+        "availability_status": current_employee.availability.is_available
     }
 
 # --- Job Applications ---
