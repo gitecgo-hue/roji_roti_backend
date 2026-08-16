@@ -72,7 +72,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 origins = [
     "http://localhost:8080",      
     "http://127.0.0.1:8080",
-    "https://your-frontend-domain.com"
+    "https://rojiroti-newversion.vercel.app/"
 ]
 
 app.add_middleware(
