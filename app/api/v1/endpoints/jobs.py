@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks 
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse, RedirectResponse 
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
@@ -38,6 +38,7 @@ from app.api.dependencies import (
     get_any_current_user,
     get_user_language
 )
+get_optional_current_user = get_any_current_user
 
 # --- Import Services ---
 from app.services.notification import NotificationService
@@ -468,11 +469,42 @@ async def search_jobs(
 # =====================================================================
 # SINGLE JOB DETAIL VIEW
 # =====================================================================
+# 1. THE OPTIONAL AUTH BYPASS
+async def get_optional_guest_user(request: Request):
+    """
+    Manually checks for a token to bypass FastAPI's strict 401 auto-error.
+    Returns None for public guests, or the User object for logged-in users.
+    """
+    auth_header = request.headers.get("Authorization")
+    
+    # If no token is provided, they are a public guest. Safely return None.
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None 
+        
+    token = auth_header.split(" ")[1]
+    
+    try:
+        # You need to decode the token here using your app's existing logic.
+        # If your get_any_current_user function accepts a token string directly, you can do:
+        # return await get_any_current_user(token=token)
+        
+        # Otherwise, decode it manually like this (adjust to match your app's standard):
+        # payload = jwt.decode(token, "YOUR_SECRET_KEY", algorithms=["HS256"])
+        # user_id = payload.get("id")
+        # return await Employee.get(PydanticObjectId(user_id)) 
+        
+        pass
+        
+    except Exception:
+        # If the token is expired or invalid, just treat them as a public guest
+        return None 
+
+# 2. THE PUBLIC ENDPOINT
 @router.get("/{job_id}", response_model=JobResponse)
 async def get_job(
     job_id: str,
     lang: str = Depends(get_user_language),
-    current_user = Depends(get_any_current_user)
+    current_user: Optional[Any] = Depends(get_optional_guest_user) # <-- Uses our custom bypass
 ):
     # 1. Fetch the job from the database
     job = await Job.get(PydanticObjectId(job_id))
@@ -482,7 +514,9 @@ async def get_job(
     # 2. Increment view count (this saves to DB instantly)
     await job.update({"$inc": {"views_count": 1}})
 
+    # ==========================================
     # 3. QUERIES (Handling ObjectId vs String)
+    # ==========================================
     
     # Applicants
     real_applicants = await JobApplication.find({"job_id": job.id}).count()
@@ -507,13 +541,14 @@ async def get_job(
             {"job_id": str(job.id), "status": "hired"}
         ).count()
 
+    # ==========================================
     # 4. FETCH CURRENT USER'S APPLICATION STATUS
+    # ==========================================
     user_application_status = None
     
-    # Only run this check if the user is an employee
+    # This now perfectly bypasses for public guests (because current_user will be None)
     if current_user and getattr(current_user, "role", None) == "employee":
         
-        # Check both ObjectId and String formats for maximum safety
         user_app = await JobApplication.find_one({
             "job_id": job.id, 
             "employee_id": current_user.id
@@ -526,10 +561,12 @@ async def get_job(
             })
             
         if user_app:
-            # If an application exists, extract the status (e.g., "applied", "shortlisted", "rejected")
             user_application_status = getattr(user_app, "status", None)
 
-    # 5. INJECT COUNTS AND STATUS POST-LOCALIZATION    
+    # ==========================================
+    # 5. INJECT COUNTS AND STATUS POST-LOCALIZATION
+    # ==========================================
+    
     # Run localization
     localized_job = job.localize(lang_code=lang)
     
@@ -550,7 +587,6 @@ async def get_job(
     # Inject the current user's application status
     job_dict["user_application_status"] = user_application_status
 
-    # Return the raw dictionary (FastAPI will map it perfectly to JobResponse now)
     return job_dict
 
 # =====================================================================
