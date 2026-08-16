@@ -56,7 +56,7 @@ class PublicVerifyRequest(BaseModel):
     identifier: str = Field(..., description="Mobile number (Primary) or Email (Secondary)")
     otp_code: str = Field(..., description="Primary authentication method")
     app_role: str = Field(..., description="Must be 'employer' or 'employee'")
-    referred_by_code: Optional[str] = None  # <-- Added for the Referral System
+    referred_by_code: Optional[str] = None 
 
 # --- ADMIN AUTHENTICATION ENDPOINTS ---
 @router.post("/admin/request_otp")
@@ -90,9 +90,12 @@ async def admin_login(data: AdminLoginRequest, request: Request):
     
     access_token = create_access_token(subject=str(user.id), user_type="admin")
     return {
-        "status": "success", "access_token": access_token, 
-        "token_type": "bearer", "user_type": "admin",
-        "role": user.role, "user_name": user.name
+        "status": "success", 
+        "access_token": access_token, 
+        "token_type": "bearer", 
+        "user_type": "admin",
+        "role": user.role, 
+        "user_name": user.name
     }
 
 # --- THE STRICT SIGN-UP FLOW ---
@@ -145,7 +148,8 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
         new_user = Employee(
             phone=clean_phone,
             name=saved_name,
-            is_active=True
+            is_active=True,
+            phone_verified=True
         )
         await new_user.insert()
     else:
@@ -153,6 +157,7 @@ async def verify_signup_otp(data: PublicVerifyRequest, request: Request):
             phone=clean_phone,
             name=saved_name,
             is_active=True,
+            phone_verified=True,
             employer_type=EmployerType.COMPANY, 
             subscription_tier=SubscriptionTier.FREE,
             referral_code=generate_referral_code()
@@ -256,6 +261,25 @@ async def login_verify(data: PublicVerifyRequest, request: Request):
 
     # Verify the OTP
     await OTPService.verify_and_consume_otp(data.identifier, data.otp_code, is_email_auth)
+    
+    # Update Verification Status
+    needs_save = False
+    
+    if is_email_auth:
+        # If logged in via email and it's currently false
+        if not getattr(user, "email_verified", True): 
+            user.email_verified = True
+            needs_save = True
+    else:
+        # If logged in via phone and it's currently false
+        if not getattr(user, "phone_verified", True): 
+            user.phone_verified = True
+            needs_save = True
+            
+    # Save to database only if we made a change
+    if needs_save:
+        await user.save()
+    # ==========================================
     
     # Generate the Token
     access_token = create_access_token(subject=str(user.id), user_type=actual_role)

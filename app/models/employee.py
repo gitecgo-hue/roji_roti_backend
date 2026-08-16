@@ -112,6 +112,7 @@ class EmployeeProfileUpdate(BaseModel):
     title: Optional[str] = Field(None, alias="job_title")
     location: Optional[str] = None
     summary: Optional[str] = Field(None, alias="about_you")
+    gender: Optional[str] = Field(None, description="Gender selection")
 
     # --- Preferences ---
     expected_salary: Optional[float] = None
@@ -145,7 +146,8 @@ class Employee(TranslatableDocument):
     email: Optional[EmailStr] = None
     email_verified: bool = False
     total_experience: Optional[float] = None
-    
+    gender: Optional[str] = None
+
     # FIXED: Renamed to match the upload/delete endpoints
     profile_picture_url: Optional[str] = None
     

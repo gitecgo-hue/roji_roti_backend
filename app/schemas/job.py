@@ -162,6 +162,7 @@ class JobDashboardResponse(BaseModel):
     location_name: Optional[str] = None
     status: JobStatus
     job_type: Optional[JobTypeEnum] = None
+    user_application_status: Optional[str] = None
     posted_at: Optional[datetime] = None
     applied_count: int = 0
     database_matches: int = 0

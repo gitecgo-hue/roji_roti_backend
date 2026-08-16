@@ -472,6 +472,7 @@ async def search_jobs(
 async def get_job(
     job_id: str,
     lang: str = Depends(get_user_language),
+    current_user = Depends(get_any_current_user)
 ):
     # 1. Fetch the job from the database
     job = await Job.get(PydanticObjectId(job_id))
@@ -481,9 +482,7 @@ async def get_job(
     # 2. Increment view count (this saves to DB instantly)
     await job.update({"$inc": {"views_count": 1}})
 
-    # ==========================================
-    #3.QUERIES (Handling ObjectId vs String)
-    # ==========================================
+    # 3. QUERIES (Handling ObjectId vs String)
     
     # Applicants
     real_applicants = await JobApplication.find({"job_id": job.id}).count()
@@ -508,14 +507,33 @@ async def get_job(
             {"job_id": str(job.id), "status": "hired"}
         ).count()
 
-    # ==========================================
-    # 4. INJECT COUNTS POST-LOCALIZATION
-    # ==========================================
+    # 4. FETCH CURRENT USER'S APPLICATION STATUS
+    user_application_status = None
     
-    # 1. Run localization
+    # Only run this check if the user is an employee
+    if current_user and getattr(current_user, "role", None) == "employee":
+        
+        # Check both ObjectId and String formats for maximum safety
+        user_app = await JobApplication.find_one({
+            "job_id": job.id, 
+            "employee_id": current_user.id
+        })
+        
+        if not user_app:
+            user_app = await JobApplication.find_one({
+                "job_id": str(job.id), 
+                "employee_id": str(current_user.id)
+            })
+            
+        if user_app:
+            # If an application exists, extract the status (e.g., "applied", "shortlisted", "rejected")
+            user_application_status = getattr(user_app, "status", None)
+
+    # 5. INJECT COUNTS AND STATUS POST-LOCALIZATION    
+    # Run localization
     localized_job = job.localize(lang_code=lang)
     
-    # 2. Force it into a standard dictionary
+    # Force it into a standard dictionary
     if hasattr(localized_job, "model_dump"):
         job_dict = localized_job.model_dump()
     elif hasattr(localized_job, "dict"):
@@ -523,13 +541,16 @@ async def get_job(
     else:
         job_dict = dict(localized_job)
     
-    # 3. Inject our live stats
+    # Inject our live stats
     job_dict["applicants_count"] = real_applicants
     job_dict["shortlisted_count"] = real_shortlisted
     job_dict["hires_count"] = real_hires
     job_dict["views_count"] = getattr(job, "views_count", 0) + 1
+    
+    # Inject the current user's application status
+    job_dict["user_application_status"] = user_application_status
 
-    # 4. Return the raw dictionary (FastAPI will map it perfectly to JobResponse now)
+    # Return the raw dictionary (FastAPI will map it perfectly to JobResponse now)
     return job_dict
 
 # =====================================================================

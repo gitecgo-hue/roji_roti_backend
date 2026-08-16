@@ -40,6 +40,7 @@ class Employer(TranslatableDocument):
     phone_verified: bool = False
     email: Optional[EmailStr] = None
     email_verified: bool = False
+    gender: Optional[str] = None
     
     # --- Company Details ---
     name: str = Field(..., description="Owner/Contact Name")    

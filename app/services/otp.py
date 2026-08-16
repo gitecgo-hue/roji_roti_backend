@@ -1,3 +1,4 @@
+import os
 import re
 import random
 import string
@@ -30,7 +31,20 @@ class OTPService:
 
     @staticmethod
     async def verify_and_consume_otp(identifier: str, otp_code: str, is_email_auth: bool):
-        """Cleanly verifies OTPs for all endpoints"""
+        """Cleanly verifies OTPs for all endpoints. Includes Dev Bypass."""
+        
+        # ==========================================
+        # 🛠️ DEV TESTING BYPASS
+        # ==========================================
+        # Replace 'True' with 'os.getenv("ENVIRONMENT") == "development"' later for safety
+        DEV_MODE = True 
+        MASTER_OTP = "1234"
+
+        if DEV_MODE and otp_code == MASTER_OTP:
+            print(f"⚠️ DEV BYPASS USED: OTP validated for {identifier}")
+            return True # Immediately approve the OTP without checking the database
+        # ==========================================
+
         if is_email_auth:
             user = await OTPService.get_user_by_identifier(identifier)
             if not user:
@@ -53,6 +67,8 @@ class OTPService:
             
             otp_record.code = None
             await otp_record.save()
+            
+        return True
 
     @staticmethod
     async def generate_and_send_otp(identifier: str, app_role: str, user=None, name: str = None):
@@ -106,7 +122,7 @@ class OTPService:
             else:
                 new_otp = OTP(
                     phone=clean_phone, 
-                    code=otp_code,  # --- Store the raw OTP directly ---
+                    code=otp_code,
                     user_type=app_role, 
                     daily_count=1, 
                     last_request_date=now,

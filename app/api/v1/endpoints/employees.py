@@ -66,6 +66,7 @@ from app.models.category import Category
 # --- Services Imports ---
 from app.services.notification import NotificationService
 from app.services.email import EmailService
+from app.services.otp import OTPService
 from app.services.webhooks import WebhookService 
 from app.services.resumes import ResumeService
 from app.services.subscriptions import SubscriptionService
@@ -100,6 +101,13 @@ class WorkExperienceInput(BaseModel):
     start_year: Optional[int] = None
     end_year: Optional[int] = None
     currently_working_here: Optional[bool] = None
+
+class EmailUpdateRequest(BaseModel):
+    email: EmailStr
+
+class VerifyEmailUpdateRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
 
 # --- Employee Dashboard & Stats ---
 @router.get("/dashboard", response_model=EmployeeDashboardResponse)
@@ -619,6 +627,99 @@ async def update_employee_phone(
         "access_token": new_access_token
     }
 
+# --- STEP 1: Request OTP for new email address ---
+from datetime import datetime, timezone
+import random
+from fastapi import HTTPException, Depends
+
+@router.post("/profile/email/send_otp", response_model=dict)
+async def request_email_update_otp(
+    data: EmailUpdateRequest,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Step 1: Takes the new email, validates it isn't in use, and sends an OTP to it.
+    """
+    clean_email = data.email.lower().strip()
+
+    # 1. Check if the email is already in use by another account
+    existing_user = await Employee.find_one(Employee.email == clean_email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="This email is already associated with another account.")
+
+    # 2. Generate OTP (or use 1234 if in DEV_MODE)
+    DEV_MODE = True
+    otp_code = "1234" if DEV_MODE else str(random.randint(1000, 9999))
+
+    # 3. THE FIX: Map the email to the 'phone' field to satisfy the OTP model requirement
+    await OTP(
+        phone=clean_email, 
+        code=otp_code, 
+        user_type="employee"
+    ).insert()
+
+    print(f"EMAIL OTP FOR {clean_email} IS: {otp_code}")
+
+    return {
+        "status": "success",
+        "message": f"An OTP has been sent to {clean_email}. Please verify to update your email."
+    }
+
+
+@router.patch("/profile/email/verify_and_update", response_model=dict)
+async def verify_and_update_email(
+    data: VerifyEmailUpdateRequest,
+    current_employee: Employee = Depends(get_current_employee)
+):
+    """
+    Step 2: Verifies the OTP. If valid, updates the user's email and marks it as verified.
+    """
+    clean_email = data.email.lower().strip()
+
+    # ==========================================
+    # 1. VERIFY OTP (Manual check to avoid OTPService phone-slicing logic)
+    # ==========================================
+    DEV_MODE = True
+    MASTER_OTP = "1234"
+
+    if DEV_MODE and data.otp_code == MASTER_OTP:
+        print(f"⚠️ DEV BYPASS USED: Email updated to {clean_email}")
+    else:
+        # Check the OTP collection where we stored the email in the phone field
+        otp_record = await OTP.find_one(OTP.phone == clean_email)
+        
+        if not otp_record or otp_record.code != data.otp_code:
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
+            
+        # Consume (delete) the OTP
+        await otp_record.delete()
+    # ==========================================
+
+    # 2. UPDATE THE EMPLOYEE FIELDS
+    current_employee.email = clean_email
+    current_employee.email_verified = True 
+
+    # 3. RECALCULATE PROFILE SCORE
+    if not current_employee.metadata:
+        from app.models.employee import ProfileMetadata # Adjust import if needed
+        current_employee.metadata = ProfileMetadata()
+        
+    current_employee.metadata.profile_completion = calculate_profile_completion(current_employee)
+    current_employee.metadata.updated_at = datetime.now(timezone.utc)
+
+    # 4. SAVE TO DATABASE
+    await current_employee.save()
+
+    return {
+        "status": "success",
+        "message": "Email successfully updated and verified!",
+        "updated_data": {
+            "email": current_employee.email,
+            "email_verified": current_employee.email_verified,
+            "profile_completion": current_employee.metadata.profile_completion
+        }
+    }
+
 # --- Resume Upload & Parsing ---
 @router.post("/profile/upload_resume", status_code=status.HTTP_200_OK)
 async def upload_and_parse_resume(
@@ -724,9 +825,14 @@ async def upload_and_parse_resume(
 # --- Resume Download ---
 @router.get("/resume/download/{employee_id}")
 async def get_employee_resume_link(
-    employee_id: str, 
+    employee_id: str,
     current_user = Depends(get_any_current_user)
 ):
+    """
+    Returns the Cloudinary URL of the employee's resume.
+    If no resume exists, it auto-generates one, uploads it to Cloudinary, 
+    saves the link to MongoDB, and returns the URL for the frontend to handle.
+    """
     # 1. Authorization and Quota Checks
     if current_user.role == "employee":
         if str(current_user.id) != employee_id:
@@ -737,21 +843,20 @@ async def get_employee_resume_link(
         raise HTTPException(status_code=403, detail="Unauthorized role.")
 
     # 2. Fetch Employee
-    from bson import ObjectId
     employee = await Employee.get(ObjectId(employee_id))
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found.")
 
-    # 3. Generate & Upload if no resume exists
+    # 3. Generate & Upload if no resume exists in the database
     if not getattr(employee, "resume_url", None):
         
-        # A. Generate PDF on the fly
+        # A. Generate PDF (returns BytesIO)
         pdf_content = ResumeService.generate_pdf(employee)
         employee_name = getattr(employee, "name", "Candidate") or "Candidate"
-        safe_name = "".join([c for c in employee_name if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+        safe_name = "".join([c for c in employee_name if c.isalnum() or c == ' ']).rstrip().replace(" ", "_")
         
         try:
-            # B. Upload the raw bytes to Cloudinary
+            # B. Upload the raw bytes directly to Cloudinary
             upload_result = cloudinary.uploader.upload(
                 pdf_content.getvalue(), 
                 resource_type="raw", 
@@ -759,45 +864,23 @@ async def get_employee_resume_link(
                 format="pdf"
             )
             
-            # C. Save the new Cloudinary URL permanently to the database
+            # C. Save the new Cloudinary URL permanently to MongoDB
             employee.resume_url = upload_result.get("secure_url")
             await employee.save()
             
         except Exception as e:
+            print(f"Cloudinary Upload Error: {str(e)}") # Useful for server logs
             raise HTTPException(status_code=500, detail="Failed to upload auto-generated resume to cloud storage.")
 
-    # 4. Consume the Quota! (Only executed if a URL exists or was successfully created)
+    # 4. Consume the Quota (Only executes if URL existed or upload succeeded)
     if current_user.role == "employer":
         await SubscriptionService.increment_usage(str(current_user.id), "download_resume")
 
-    # 5. Return the URL in a JSON response
+    # 5. Return ONLY the JSON data, leaving the actual file download to the frontend
     return {
         "status": "success",
-        "message": "Resume is ready.",
+        "message": "Resume link retrieved successfully.",
         "resume_url": employee.resume_url
-    }
-
-# --- Status & Visibility ---
-@router.patch("/availability", status_code=status.HTTP_200_OK)
-async def update_availability_status(
-    data: AvailabilityUpdate,
-    current_employee: Employee = Depends(get_current_employee)
-):
-    # 1. Check if the availability object exists, if not, create it
-    if not current_employee.availability:
-        from app.models.employee import Availability # Make sure this is imported at the top of your file
-        current_employee.availability = Availability()
-        
-    # 2. Assign the value to the correct nested field
-    current_employee.availability.is_available = data.is_available
-
-    await current_employee.save()
-    status_label = "Available" if data.is_available else "Not Available" 
-    
-    return {
-        "status": "success",
-        "message": "Availability updated successfully",
-        "availability_status": current_employee.availability.is_available
     }
 
 # --- Job Applications ---

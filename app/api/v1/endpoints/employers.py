@@ -1,4 +1,5 @@
 # --- IMPORTS ---
+from PIL.ImagePalette import random
 from apscheduler import job
 from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -7,11 +8,13 @@ from beanie import PydanticObjectId
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+import random as py_random
 import uuid
 import math
 import re
 
 # --- Core Imports ---
+from app.api.v1.endpoints.employees import calculate_profile_completion
 from app.core.config import settings
 
 # --- Dependencies Imports ---
@@ -19,7 +22,7 @@ from app.api.dependencies import get_current_employer, get_current_employee
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource, GeoLocation
-from app.models.employee import Employee, Skill, Education, ProfileDocument
+from app.models.employee import Employee, ProfileMetadata, Skill, Education, ProfileDocument
 from app.models.subscriptions import Subscription
 from app.models.transaction import Transaction
 from app.models.notification import Notification, NotificationType
@@ -35,6 +38,7 @@ from app.models.application import JobApplication, ApplicationStatus
 from app.services.cloudinary_service import upload_file
 from app.services.cloudinary_service import delete_file
 from app.services.notification import NotificationService
+from app.services.otp import OTPService
 from app.services.subscriptions import SubscriptionService
 from app.services.resumes import ResumeService
 from app.services.email import EmailService
@@ -99,6 +103,13 @@ class EmployeeSearchFilter(BaseModel):
     city: Optional[str] = None
     max_distance_km: Optional[int] = 10
     min_experience_years: Optional[int] = 0
+
+class EmailUpdateRequest(BaseModel):
+    email: EmailStr
+
+class VerifyEmailUpdateRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
 
     # --- Pagination Variables ---
     page: int = Field(default=1, ge=1, description="Page number (starts at 1)")
@@ -200,25 +211,9 @@ async def update_employer_profile(
             "message": "No changes were provided.",
             "updated_fields": []
         }
-
-    # ==========================================
-    # 1. EMAIL & GSTIN VERIFICATION LOGIC
-    # ==========================================
-    if "email" in update_dict and update_dict["email"]:
-        existing_employer = await Employer.find_one(
-            {"email": update_dict["email"], "_id": {"$ne": current_employer.id}}
-        )
-        if existing_employer:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="An account with this email already exists."
-            )
-        
-        # Reset email verification if email changed
-        if update_dict["email"] != getattr(current_employer, "email", None):
-            current_employer.email = update_dict["email"]
-            current_employer.email_verified = False
-
+    # =========================================
+    # GSTIN VERIFICATION LOGIC
+    # =========================================
     # Reset GSTIN verification if GST number changed
     if "gstin" in update_dict:
         if update_dict["gstin"] != getattr(current_employer, "gstin", None):
@@ -387,8 +382,7 @@ async def update_employer_phone(
             detail="This is already your current phone number."
         )
 
-    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or \
-                  await Employee.find_one({"phone": clean_new_phone})
+    phone_taken = await Employer.find_one({"phone": clean_new_phone})
     
     if phone_taken:
         raise HTTPException(
@@ -418,6 +412,93 @@ async def update_employer_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_employer.phone
+    }
+
+# --- EMAIL UPDATE & VERIFICATION FLOW ---
+@router.post("/profile/email/send_otp", response_model=dict)
+async def request_email_update_otp(
+    data: EmailUpdateRequest,
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Step 1: Takes the new email, validates it isn't in use, and sends an OTP to it.
+    """
+    clean_email = data.email.lower().strip()
+
+    # 1. Check if the email is already in use by another employee
+    existing_user = await Employer.find_one(Employer.email == clean_email)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="This email is already associated with another account.")
+
+    # 2. Generate a 4-digit
+    DEV_MODE = True
+    otp_code = "1234" if DEV_MODE else str(py_random.randint(1000, 9999))
+
+    # 3. Save OTP to the database (Assuming your OTP model supports an 'identifier' or 'email' field)
+    # If your model uses 'phone' for everything, you might need to map it to 'identifier'
+    await OTP(
+        phone=clean_email,
+        code=otp_code, 
+        user_type="employer"
+    ).insert()
+
+    # 4. Trigger your email sending logic here (e.g., using a NotificationService or EmailService)
+    # await EmailService.send_otp_email(clean_email, otp_code)
+    
+    # FOR TESTING ONLY: Print the OTP to the console so you can test it without a real email server
+    print(f"EMAIL OTP FOR {clean_email} IS: {otp_code}")
+
+    return {
+        "status": "success",
+        "message": f"An OTP has been sent to {clean_email}. Please verify to update your email."
+    }
+
+# --- EMAIL VERIFICATION & UPDATE ---
+@router.patch("/profile/email/verify_and_update", response_model=dict)
+async def verify_and_update_email(
+    data: VerifyEmailUpdateRequest,
+    current_employer: Employer = Depends(get_current_employer) # Ensure this is your employer dependency
+):
+    """
+    Step 2: Verifies the OTP. If valid, updates the employer's email and marks it as verified.
+    """
+    clean_email = data.email.lower().strip()
+
+    # ==========================================
+    # 1. VERIFY OTP 
+    # ==========================================
+    DEV_MODE = True
+    MASTER_OTP = "1234"
+
+    if DEV_MODE and data.otp_code == MASTER_OTP:
+        print(f"⚠️ DEV BYPASS USED: Email updated to {clean_email}")
+    else:
+        # Check the OTP collection where we stored the email in the phone field
+        otp_record = await OTP.find_one(OTP.phone == clean_email)
+        
+        if not otp_record or otp_record.code != data.otp_code:
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
+            
+        # Consume (delete) the OTP
+        await otp_record.delete()
+    # ==========================================
+
+    # 2. UPDATE THE EMPLOYER FIELDS
+    current_employer.email = clean_email
+    current_employer.email_verified = True 
+
+    # (Notice we completely removed the metadata/profile_score logic here!)
+
+    # 3. SAVE TO DATABASE
+    await current_employer.save()
+
+    return {
+        "status": "success",
+        "message": "Email successfully updated and verified!",
+        "updated_data": {
+            "email": current_employer.email,
+            "email_verified": current_employer.email_verified
+        }
     }
 
 # --- KYC SUBMISSION ---

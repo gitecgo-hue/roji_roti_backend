@@ -31,6 +31,8 @@ class EmployeeProfileUpdate(BaseModel):
     title: Optional[str] = Field(None, alias="job_title")
     location: Optional[str] = None
     summary: Optional[str] = Field(None, alias="about_you")
+    gender: Optional[str] = Field(None, description="Gender selection")
+
 
     # --- Preferences ---
     expected_salary: Optional[float] = None
@@ -106,7 +108,10 @@ class EmployeeResponse(BaseModel):
     name: Optional[str] = None
     summary: Optional[str] = None
     email: Optional[EmailStr] = None
+    email_verified: bool = False
     avatar: Optional[str] = None
+    gender: Optional[str] = None
+
     
     # Location
     location: Optional[dict] = None
@@ -134,6 +139,7 @@ class EmployeeDashboardResponse(BaseModel):
     Shows engagement metrics like total unlocks.
     """
     name: str
+    gender: Optional[str] = None
     category: str
     is_available: bool
     total_unlocks: int

@@ -27,6 +27,7 @@ class EmployerResponse(BaseModel):
     phone: str
     employer_type: EmployerType
     name: str
+    gender: Optional[str] = None
     company_name: Optional[str]
     location: Optional[str] = None
     subscription_tier: SubscriptionTier
@@ -65,8 +66,8 @@ class EmployerProfileUpdate(BaseModel):
     
     # --- Personal Details ---
     name: Optional[str] = Field(None, min_length=2, max_length=50)
-    email: Optional[EmailStr] = None
     employer_type: Optional[EmployerType] = None
+    gender: Optional[str] = Field(None, description="Gender selection")
     
     # --- Company Details ---
     company_name: Optional[str] = None
@@ -81,15 +82,15 @@ class EmployerProfileUpdate(BaseModel):
     social_profiles: Optional[Dict[str, str]] = None
     
     # --- Location Details ---
-    company_address: Optional[str] = None  # Used for Ola Maps Geocoding
+    company_address: Optional[str] = None 
     address: Optional[str] = None
 
 
 # --- Employer Kyc Detils ---
 class KYCSubmitRequest(BaseModel):
-    document_type: str        # e.g., "PAN", "GSTIN", "AADHAAR"
+    document_type: str
     document_number: str
-    document_url: str         # URL to uploaded image/pdf
+    document_url: str
 
 class AdminKYCStatusUpdate(BaseModel):
     status: KYCStatus
@@ -105,9 +106,11 @@ class ReferralDashboardResponse(BaseModel):
 class EmployerPersonalProfileResponse(BaseModel):
     """Schema mapping exactly to the 'Profile' UI Card"""
     name: Optional[str] = None
+    gender: Optional[str] = None
     email: Optional[EmailStr] = None
     email_verified: bool = False
     phone: str
+    phone_verified: bool = False
     gstin: Optional[str] = None
     gstin_verified: bool = False
 
