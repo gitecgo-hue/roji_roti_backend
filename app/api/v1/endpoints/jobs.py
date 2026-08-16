@@ -504,7 +504,7 @@ async def get_optional_guest_user(request: Request):
 async def get_job(
     job_id: str,
     lang: str = Depends(get_user_language),
-    current_user: Optional[Any] = Depends(get_optional_guest_user) # <-- Uses our custom bypass
+    current_user: Optional[Any] = Depends(get_optional_guest_user)
 ):
     # 1. Fetch the job from the database
     job = await Job.get(PydanticObjectId(job_id))
