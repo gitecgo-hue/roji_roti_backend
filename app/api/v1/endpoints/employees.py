@@ -619,9 +619,6 @@ async def update_employee_phone(
     current_employee.phone = clean_new_phone
     await current_employee.save()
 
-    # 5. Generate a fresh token with the new phone number
-    new_access_token = create_access_token({"sub": current_employee.phone}, user_type="employee")
-
     return {
         "status": "success", 
         "message": "Phone number successfully updated.", 
@@ -629,10 +626,6 @@ async def update_employee_phone(
     }
 
 # --- STEP 1: Request OTP for new email address ---
-from datetime import datetime, timezone
-import random
-from fastapi import HTTPException, Depends
-
 @router.post("/profile/email/send_otp", response_model=dict)
 async def request_email_update_otp(
     data: EmailUpdateRequest,

@@ -374,7 +374,7 @@ async def delete_employer_profile_picture(
 # --- Mobile Number Change ---
 @router.post("/profile/send_phone_no_update_otp", response_model=dict)
 async def request_phone_update_otp(
-    data: RequestPhoneUpdate, # <-- Uses the schema without the OTP field
+    data: RequestPhoneUpdate,
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
@@ -409,9 +409,6 @@ async def request_phone_update_otp(
             user_type="employer"
         ).insert()
 
-    if DEV_MODE:
-        print(f"⚠️ DEV BYPASS USED: PHONE OTP FOR {clean_new_phone} IS {otp_code}")
-
     return {
         "status": "success",
         "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
@@ -420,7 +417,7 @@ async def request_phone_update_otp(
 
 @router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
 async def update_employer_phone(
-    data: VerifyPhoneUpdate, # <-- Uses the schema that strictly requires the OTP field
+    data: VerifyPhoneUpdate,
     current_employer: Employer = Depends(get_current_employer)
 ):
     """
@@ -445,7 +442,7 @@ async def update_employer_phone(
     
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
+            status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid or expired OTP for the new phone number."
         )
 
