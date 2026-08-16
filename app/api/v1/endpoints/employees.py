@@ -563,7 +563,8 @@ async def send_phone_update_otp(
         raise HTTPException(status_code=409, detail="This phone number is already registered to another account.")
 
     # 3. Generate a 4-digit OTP (Changed from 100000, 999999)
-    otp_code = str(random.randint(1000, 9999))
+    DEV_MODE = True
+    otp_code = "1234" if DEV_MODE else str(random.randint(1000, 9999))
 
     print(f"DEBUG: Generated OTP for {clean_new_phone}: {otp_code}")
     
@@ -597,7 +598,7 @@ async def update_employee_phone(
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
+            status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid or expired OTP for the new phone number."
         )
 
