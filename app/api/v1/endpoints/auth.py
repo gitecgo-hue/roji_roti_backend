@@ -69,8 +69,6 @@ async def request_admin_otp(data: AdminOTPRequest):
     dest_type, otp_code = await OTPService.generate_and_send_otp(clean_phone, "admin", existing_admin)
     
     response = {"message": "Admin OTP Sent"}
-    if getattr(settings, "DEBUG", False):
-        response["test_otp"] = otp_code
         
     return response
 
@@ -111,9 +109,7 @@ async def request_signup_otp(data: RequestSignupOTP, request: Request):
     dest_type, otp_code = await OTPService.generate_and_send_otp(data.identifier, app_role, user=None, name=data.name)
     
     response = {"message": f"OTP sent to your {dest_type}. Phone number available for registration."}
-    if getattr(settings, "DEBUG", False):
-        response["test_otp"] = otp_code
-        
+
     return response
 
 # --- VERIFY OTP DURING LOGIN ---
@@ -238,8 +234,6 @@ async def request_login_otp(data: PublicOTPRequest, request: Request):
     dest_type, otp_code = await OTPService.generate_and_send_otp(data.identifier, app_role, user)
     
     response = {"message": f"OTP sent to your {dest_type}."}
-    if getattr(settings, "DEBUG", False):
-        response["test_otp"] = otp_code
         
     return response
 

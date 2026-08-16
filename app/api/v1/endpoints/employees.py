@@ -565,8 +565,6 @@ async def send_phone_update_otp(
     # 3. Generate a 4-digit OTP (Changed from 100000, 999999)
     DEV_MODE = True
     otp_code = "1234" if DEV_MODE else str(random.randint(1000, 9999))
-
-    print(f"DEBUG: Generated OTP for {clean_new_phone}: {otp_code}")
     
     # 4. Save it to the database
     otp_record = await OTP.find_one({"phone": clean_new_phone})
@@ -579,7 +577,10 @@ async def send_phone_update_otp(
     # 5. Send the SMS using your SMS service (Uncomment when ready)
     # await SmsService.send_otp(clean_new_phone, otp_code)
     
-    return {"status": "success", "message": "OTP sent to new phone number."}
+    return {
+            "status": "success",
+            "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
+        }
 
 
 # --- STEP 2: Verify OTP and apply the update ---
@@ -625,7 +626,6 @@ async def update_employee_phone(
         "status": "success", 
         "message": "Phone number successfully updated.", 
         "new_phone": current_employee.phone,
-        "access_token": new_access_token
     }
 
 # --- STEP 1: Request OTP for new email address ---
@@ -658,8 +658,6 @@ async def request_email_update_otp(
         code=otp_code, 
         user_type="employee"
     ).insert()
-
-    print(f"EMAIL OTP FOR {clean_email} IS: {otp_code}")
 
     return {
         "status": "success",

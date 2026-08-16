@@ -33,15 +33,12 @@ class OTPService:
     async def verify_and_consume_otp(identifier: str, otp_code: str, is_email_auth: bool):
         """Cleanly verifies OTPs for all endpoints. Includes Dev Bypass."""
         
-        # ==========================================
-        # 🛠️ DEV TESTING BYPASS
-        # ==========================================
+        # DEV TESTING BYPASS
         # Replace 'True' with 'os.getenv("ENVIRONMENT") == "development"' later for safety
         DEV_MODE = True 
         MASTER_OTP = "1234"
 
         if DEV_MODE and otp_code == MASTER_OTP:
-            print(f"⚠️ DEV BYPASS USED: OTP validated for {identifier}")
             return True # Immediately approve the OTP without checking the database
         # ==========================================
 
@@ -80,9 +77,6 @@ class OTPService:
         
         # Use '1234' for fast local testing, otherwise generate random 4-digit code
         otp_code = "1234" if is_debug else ''.join(random.choices(string.digits, k=4))
-
-        if is_debug:
-            print(f"🛠️ [TEST MODE ACTIVE] Generated OTP for {identifier}: {otp_code}")
 
         if OTPService.is_email(identifier):
             if user:

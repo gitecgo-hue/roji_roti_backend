@@ -93,16 +93,19 @@ class RateEmployeeRequest(BaseModel):
 class ApplicationStatusUpdate(BaseModel):
     new_status: ApplicationStatus | str
 
-class UpdatePhoneRequest(BaseModel):
-    new_phone: str = Field(..., description="The new 10-digit mobile number")
-    otp_code: str = Field(..., description="The 4-digit OTP sent to the NEW number")
-
 class EmployeeSearchFilter(BaseModel):
     category: Optional[str] = None
     skills: Optional[List[str]] = []
     city: Optional[str] = None
     max_distance_km: Optional[int] = 10
     min_experience_years: Optional[int] = 0
+
+class RequestPhoneUpdate(BaseModel):
+    new_phone: str
+
+class VerifyPhoneUpdate(BaseModel):
+    new_phone: str
+    otp_code: str
 
 class EmailUpdateRequest(BaseModel):
     email: EmailStr
@@ -368,12 +371,15 @@ async def delete_employer_profile_picture(
 
     return {"message": "Profile picture deleted successfully."}
 
-# --- PROFILE & ACCOUNT MANAGEMENT (SECURE) ---
-@router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
-async def update_employer_phone(
-    data: UpdatePhoneRequest,
+# --- Mobile Number Change ---
+@router.post("/profile/send_phone_no_update_otp", response_model=dict)
+async def request_phone_update_otp(
+    data: RequestPhoneUpdate, # <-- Uses the schema without the OTP field
     current_employer: Employer = Depends(get_current_employer)
 ):
+    """
+    Step 1: Validates the new phone number isn't in use and sends an OTP to it.
+    """
     clean_new_phone = data.new_phone[-10:]
 
     if current_employer.phone == clean_new_phone:
@@ -383,7 +389,52 @@ async def update_employer_phone(
         )
 
     phone_taken = await Employer.find_one({"phone": clean_new_phone})
-    
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number is already registered to another account."
+        )
+
+    DEV_MODE = True
+    otp_code = "1234" if DEV_MODE else str(py_random.randint(1000, 9999))
+
+    otp_record = await OTP.find_one({"phone": clean_new_phone})
+    if otp_record:
+        otp_record.code = otp_code
+        await otp_record.save()
+    else:
+        await OTP(
+            phone=clean_new_phone,
+            code=otp_code,
+            user_type="employer"
+        ).insert()
+
+    if DEV_MODE:
+        print(f"⚠️ DEV BYPASS USED: PHONE OTP FOR {clean_new_phone} IS {otp_code}")
+
+    return {
+        "status": "success",
+        "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
+    }
+
+
+@router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
+async def update_employer_phone(
+    data: VerifyPhoneUpdate, # <-- Uses the schema that strictly requires the OTP field
+    current_employer: Employer = Depends(get_current_employer)
+):
+    """
+    Step 2: Verifies the OTP and permanently updates the Employer's phone number.
+    """
+    clean_new_phone = data.new_phone[-10:]
+
+    if current_employer.phone == clean_new_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="This is already your current phone number."
+        )
+
+    phone_taken = await Employer.find_one({"phone": clean_new_phone})
     if phone_taken:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, 
@@ -392,19 +443,20 @@ async def update_employer_phone(
 
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     
-    # Compare the provided OTP with the one stored in the database
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or expired OTP for the new phone number."
         )
 
+    # Consume the OTP so it cannot be reused
     otp_record.code = None
     await otp_record.save()
 
+    # Update the employer profile
     current_employer.phone = clean_new_phone
     if hasattr(current_employer, "updated_at"):
-        current_employer.updated_at = datetime.utcnow()
+        current_employer.updated_at = datetime.now(timezone.utc)
         
     await current_employer.save()
 
