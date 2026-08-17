@@ -6,7 +6,6 @@ from pydantic import Field, field_validator
 class ApplicationStatus(str, Enum):
     PENDING = "pending"
     APPLIED = "applied"
-    REVIEWING = "reviewing"
     REVIEWED = "reviewed"
     SHORTLISTED = "shortlisted"
     REJECTED = "rejected"
