@@ -124,7 +124,7 @@ class EmployeeResponse(BaseModel):
     # Preferences & Settings
     contact_visibility: Optional[str] = None
     expected_salary: Optional[float] = None
-    availability: Optional[dict] = None
+    is_available: Optional[bool] = None
     preferences: Optional[dict] = None
     social_links: Optional[dict] = None
     
