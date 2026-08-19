@@ -212,6 +212,10 @@ def calculate_profile_completion(employee: Employee) -> int:
     return min(score, 100)
 
 #--- Profile Update ---
+from fastapi import Request, BackgroundTasks, Depends, HTTPException, status
+from datetime import datetime, timezone
+from pydantic import ValidationError
+
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
 async def update_employee_profile(
     request: Request,
@@ -249,7 +253,6 @@ async def update_employee_profile(
                 best_address = raw_loc
                 
             # 3. Clean up the Map API's mess (Deduplicate the words)
-            # This turns "Indore, MP, India, MP, India" back into "Indore, MP, India"
             seen = set()
             parts = []
             for p in best_address.split(","):
@@ -285,9 +288,11 @@ async def update_employee_profile(
         current_employee.email = update_dict["email"]
         current_employee.email_verified = False 
 
+    # ADDED "notice_period_days" to this direct mapping list
     direct_fields = [
         "name", "title", "summary", "phone", "languages", 
-        "expected_salary", "age", "gender", "referred_by_id", "total_experience"
+        "expected_salary", "age", "gender", "referred_by_id", "total_experience",
+        "notice_period_days" 
     ]
     
     for field in direct_fields:
@@ -300,12 +305,6 @@ async def update_employee_profile(
     db_force_updates = {} # Dictionary to store aggressive overrides
 
     try:
-        # --- Availability & Preferences ---
-        if "notice_period_days" in update_dict:
-            if not current_employee.availability:
-                current_employee.availability = Availability()
-            current_employee.availability.notice_period_days = update_dict["notice_period_days"]
-
         # --- Preferences ---
         pref_keys = ["preferred_job_types", "category", "preferred_roles", "preferred_locations", "remote_work"]
         if any(k in update_dict for k in pref_keys):
@@ -337,7 +336,6 @@ async def update_employee_profile(
 
         # --- Arrays (Direct override to prevent ghost appending) ---
         if "skills" in raw_payload:
-            # Overwrites entirely. If user sends [], it deletes all old skills.
             skills_list = raw_payload["skills"]
             current_employee.skills = [Skill(name=skill) for skill in skills_list if isinstance(skill, str)]
             db_force_updates["skills"] = [{"name": skill} for skill in skills_list if isinstance(skill, str)]
@@ -370,7 +368,6 @@ async def update_employee_profile(
     await current_employee.save()
     
     # 2. FORCE MongoDB to overwrite the arrays using the raw driver
-    # Also aggressively save the calculated score just in case Pydantic misses it
     if db_force_updates:
         db_force_updates["metadata.profile_completion"] = current_employee.metadata.profile_completion
         await Employee.get_motor_collection().update_one(
