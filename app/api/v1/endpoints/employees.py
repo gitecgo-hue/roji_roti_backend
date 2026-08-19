@@ -712,6 +712,37 @@ async def verify_and_update_email(
         }
     }
 
+# --- Availability Update ---
+@router.patch("/availability", status_code=status.HTTP_200_OK)
+async def update_availability(
+    data: AvailabilityUpdate,
+    current_employee = Depends(get_current_employee),
+):
+    """Updates the employee's current availability status.
+
+    Accepts a JSON payload: {"is_available": true} or {"is_available": false}
+    """
+    
+    # 1. Update the boolean field 
+    # (Note: ensure 'is_available' matches the exact field name in your Employee database model)
+    current_employee.is_available = data.is_available
+    
+    # 2. Update the timestamp if your model uses one
+    if hasattr(current_employee, "updated_at"):
+        current_employee.updated_at = datetime.now(timezone.utc)
+        
+    # 3. Save to the database
+    await current_employee.save()
+    
+    # 4. Generate a user-friendly message
+    status_text = "available for work" if data.is_available else "unavailable"
+    
+    return {
+        "status": "success",
+        "message": f"Your profile has been updated to {status_text}.",
+        "is_available": current_employee.is_available
+    }
+
 # --- Resume Upload & Parsing ---
 @router.post("/profile/upload_resume", status_code=status.HTTP_200_OK)
 async def upload_and_parse_resume(
