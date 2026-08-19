@@ -131,7 +131,7 @@ async def get_employee_dashboard(
                         if current_employee.preferences and current_employee.preferences.job_types
                         else "Profile Incomplete")
     
-    is_available = current_employee.availability.is_available if current_employee.availability else False
+    is_available = getattr(current_employee, "is_available", True)
     location_display = current_employee.location.city if current_employee.location and current_employee.location.city else "Location pending"
     daily_rate = current_employee.expected_salary
 
