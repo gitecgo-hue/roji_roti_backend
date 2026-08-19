@@ -169,6 +169,7 @@ class Employee(TranslatableDocument):
     contact_visibility: ContactVisibility = ContactVisibility.RESTRICTED
     expected_salary: Optional[float] = None
     is_available: bool = True
+    notice_period_days: Optional[int] = None
     preferences: Optional[Preferences] = Field(default_factory=Preferences)
     social_links: Optional[SocialLinks] = Field(default_factory=SocialLinks)
     
