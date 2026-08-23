@@ -843,6 +843,10 @@ async def upload_and_parse_resume(
     }
 
 # --- Resume Download ---
+from fastapi import Depends, HTTPException
+from bson import ObjectId
+import cloudinary.uploader
+
 @router.get("/resume/download/{employee_id}")
 async def get_employee_resume_link(
     employee_id: str,
@@ -877,11 +881,11 @@ async def get_employee_resume_link(
         
         try:
             # B. Upload the raw bytes directly to Cloudinary
+            # NOTE: For raw files, the extension MUST be included in the public_id string
             upload_result = cloudinary.uploader.upload(
                 pdf_content.getvalue(), 
                 resource_type="raw", 
-                public_id=f"resumes/{employee_id}_{safe_name}",
-                format="pdf"
+                public_id=f"resumes/{employee_id}_{safe_name}.pdf"
             )
             
             # C. Save the new Cloudinary URL permanently to MongoDB
