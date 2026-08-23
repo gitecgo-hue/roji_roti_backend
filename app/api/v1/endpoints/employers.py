@@ -123,21 +123,19 @@ class VerifyEmailUpdateRequest(BaseModel):
 async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
     
-    # 1. Fetch all jobs belonging to this employer (Only need to do this ONCE!)
+    # 1. Fetch all jobs belonging to this employer
     my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
-    my_job_ids = [str(job.id) for job in my_jobs]
     
-    # 2. Calculate Active Jobs
+    # 2. Calculate Active Jobs (Still calculates the 7 active ones, just in case you need it later)
     active_jobs = sum(1 for job in my_jobs if job.status == "published")
     
-    # 3. Calculate Total Applicants (using the fast method we just discovered)
+    # 3. Calculate Total Applicants
     total_applicants = sum(job.applicants_count for job in my_jobs if getattr(job, "applicants_count", 0))
 
-    # 4. Calculate Total Jobs Posted dynamically!
+    # 4. Calculate Total Jobs Posted (This is your true 9 jobs)
     total_jobs_posted = len(my_jobs)
     
     # 5. SHORTLISTED COUNT
-    # Keep the IDs in their native format (don't convert to str!)
     native_job_ids = [job.id for job in my_jobs]
     
     # 1st Attempt: Use the Enum
@@ -154,7 +152,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
     if shortlisted == 0 and native_job_ids:
         all_apps = await JobApplication.find({"job_id": {"$in": native_job_ids}}).to_list()
 
-    # 6. Calculate Total Contacts Unlocked dynamically!
+    # 6. Calculate Total Contacts Unlocked dynamically
     total_contacts = await ContactUnlock.find(
         ContactUnlock.employer_id == current_employer.id
     ).count()
@@ -168,7 +166,10 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
         is_active=sub.is_active,
         days_left=days_left,
         expiry_date=sub.expiry_date,
-        active_jobs_count=active_jobs,
+        
+        # THE FIX: We pass 'total_jobs_posted' here so the frontend reads '9' instead of '7'
+        active_jobs_count=total_jobs_posted, 
+        
         total_applicants_count=total_applicants,
         shortlisted_count=shortlisted,
         job_posts_used=total_jobs_posted, 
