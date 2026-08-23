@@ -900,12 +900,14 @@ async def get_employee_resume_link(
     if current_user.role == "employer":
         await SubscriptionService.increment_usage(str(current_user.id), "download_resume")
 
+    return RedirectResponse(url=employee.resume_url)
+
     # 5. Return ONLY the JSON data, leaving the actual file download to the frontend
-    return {
-        "status": "success",
-        "message": "Resume link retrieved successfully.",
-        "resume_url": employee.resume_url
-    }
+    # return {
+    #     "status": "success",
+    #     "message": "Resume link retrieved successfully.",
+    #     "resume_url": employee.resume_url
+    # }
 
 # --- Job Applications ---
 @router.post("/jobs/apply/{job_id}", status_code=status.HTTP_201_CREATED)
