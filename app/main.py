@@ -53,6 +53,7 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    docs_url="/docs/backend",
     lifespan=lifespan
 )
 
@@ -94,8 +95,7 @@ async def root_screen():
     html_content = f"""
     <!DOCTYPE html>
     <html>
-        <head>
-            <title>{settings.PROJECT_NAME} API</title>
+        
             <style>
                 body {{
                     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -133,8 +133,7 @@ async def root_screen():
         <body>
             <div class="card">
                 <h1>Welcome to {settings.PROJECT_NAME}</h1>
-                <p>The backend services are running successfully. Click below to explore and test the endpoints.</p>
-                <a href="/docs" class="btn">View API Documentation</a>
+                <p>The backend services are running successfully</p>
                 <div class="version">Version: {settings.VERSION}</div>
             </div>
         </body>
