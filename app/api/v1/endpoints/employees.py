@@ -1031,8 +1031,9 @@ async def get_saved_jobs(
 
             applicants = getattr(job, "applicants_count", 0)
             
-            # Fetch experience from the localized job dict. 
             experience_str = loc_job.get("total_experience_required", "Not specified")
+            
+            job_type_str = loc_job.get("job_type", "Not specified")
 
             saved_jobs_data.append({
                 "job_id": str(job.id),
@@ -1040,9 +1041,10 @@ async def get_saved_jobs(
                 "company_name": loc_employer.get("company_name", "Unknown Company"),
                 "location": loc_job.get("job_city", "Not specified"),
                 "expected_salary": salary_str,
-                "created_at": getattr(job, "created_at", None),
                 "applicants_count": applicants,
-                "total_experience_required": experience_str
+                "total_experience_required": experience_str,
+                "job_type": job_type_str,
+                "created_at": getattr(job, "created_at", None)
             })
         else:
             current_employee.saved_job_ids.remove(job_id)
