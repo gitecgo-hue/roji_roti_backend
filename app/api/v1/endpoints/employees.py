@@ -976,6 +976,9 @@ async def get_applied_jobs(
                     loc_employer = employer.model_dump()
             else:
                 loc_employer = {}
+                        
+            experience_str = loc_job.get("total_experience_required", "Not specified")
+            job_city_str = loc_job.get("job_city", "Not specified")
 
             applied_jobs_data.append({
                 "application_id": str(app.id),
@@ -983,6 +986,8 @@ async def get_applied_jobs(
                 "job_title": loc_job.get("job_title", "Unknown Title"),
                 "company_name": loc_employer.get("company_name", "Unknown Company"),
                 "status": getattr(app, "status", "pending"),
+                "total_experience_required": experience_str,
+                "job_city": job_city_str,
                 "applied_at": getattr(app, "applied_at", app.id.generation_time)
             })
 
@@ -1027,7 +1032,6 @@ async def get_saved_jobs(
             applicants = getattr(job, "applicants_count", 0)
             
             # Fetch experience from the localized job dict. 
-            # Note: Change "experience" to "min_experience" or whatever your exact DB field is named!
             experience_str = loc_job.get("total_experience_required", "Not specified")
 
             saved_jobs_data.append({
