@@ -843,10 +843,6 @@ async def upload_and_parse_resume(
     }
 
 # --- Resume Download ---
-from fastapi import Depends, HTTPException
-from bson import ObjectId
-import cloudinary.uploader
-
 @router.get("/resume/download/{employee_id}")
 async def get_employee_resume_link(
     employee_id: str,
@@ -1028,13 +1024,21 @@ async def get_saved_jobs(
             elif job.min_fixed_salary:
                 salary_str = f"From ₹{job.min_fixed_salary}"
 
+            applicants = getattr(job, "applicants_count", 0)
+            
+            # Fetch experience from the localized job dict. 
+            # Note: Change "experience" to "min_experience" or whatever your exact DB field is named!
+            experience_str = loc_job.get("total_experience_required", "Not specified")
+
             saved_jobs_data.append({
                 "job_id": str(job.id),
                 "job_title": loc_job.get("job_title", "Unknown Title"),
                 "company_name": loc_employer.get("company_name", "Unknown Company"),
                 "location": loc_job.get("job_city", "Not specified"),
                 "expected_salary": salary_str,
-                "created_at": getattr(job, "created_at", None)
+                "created_at": getattr(job, "created_at", None),
+                "applicants_count": applicants,
+                "total_experience_required": experience_str
             })
         else:
             current_employee.saved_job_ids.remove(job_id)
