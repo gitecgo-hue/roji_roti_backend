@@ -149,13 +149,28 @@ async def create_job(
     await new_job.insert()
 
     # Trigger translation in the background
+    # Update this list wherever you trigger the translation!
+    fields_to_translate = [
+            "job_title", 
+            "job_category", 
+            "job_description", 
+            "job_city", 
+            "minimum_education", 
+            "work_location_type", 
+            "pay_type", 
+            "total_experience_required", 
+            "address", 
+            "communication_preferences", 
+            "skills_preference"
+        ]
+
     background_tasks.add_task(
-        translate_document_fields, 
-        str(new_job.id), 
-        Job, 
-        ["job_title", "job_description"], 
-        "hi"
-    )
+            translate_document_fields,
+            str(new_job.id),
+            Job,
+            fields_to_translate,
+            "hi"
+        )
 
     if new_job.status == "published":
         await NotificationService.notify_user(
@@ -596,7 +611,7 @@ async def get_job(
 async def update_job_post(
     job_id: str,
     job_update_data: JobUpdateRequest,
-    background_tasks: BackgroundTasks, # Added background tasks
+    background_tasks: BackgroundTasks,
     current_employer: Employer = Depends(get_current_employer)
 ):
     try:
@@ -625,13 +640,26 @@ async def update_job_post(
     await job.save()
     
     # --- RE-TRIGGER TRANSLATION ON UPDATE ---
-    # If the title or description was updated, update the Hindi translation in the background!
+    fields_to_translate = [
+        "job_title", 
+        "job_category", 
+        "job_description", 
+        "job_city", 
+        "minimum_education", 
+        "work_location_type", 
+        "pay_type", 
+        "total_experience_required", 
+        "address", 
+        "communication_preferences", 
+        "skills_preference"
+    ]
+    
     if "job_title" in update_dict or "job_description" in update_dict:
         background_tasks.add_task(
-            translate_document_fields, 
-            str(job.id), 
-            Job, 
-            ["job_title", "job_description"], 
+            translate_document_fields,
+            str(job.id),
+            Job,
+            fields_to_translate,
             "hi"
         )
     

@@ -191,8 +191,48 @@ async def fix_corrupted_schema(
         "fixes_applied": repair_results
     }
 
-# --- Wrong Translation Cleaner ---
-@router.post("/system/clean-translations")
+# --- Employeee Translation Cleanup ---
+@router.post("/system/clean-employee-translations")
+async def clean_employee_translations():
+    """
+    Hunts down the Google 'Error 500' string in Employee translations
+    and restores their real original names/text.
+    """
+    # Fetch all employees that have a Hindi translation dictionary
+    employees = await Employee.find({"translations.hi": {"$exists": True}}).to_list()
+    
+    fixed_count = 0
+    
+    for emp in employees:
+        needs_saving = False
+        
+        if emp.translations and "hi" in emp.translations:
+            for field, translated_text in list(emp.translations["hi"].items()):
+                
+                # Look for the exact Google error string
+                if isinstance(translated_text, str) and ("Error 500" in translated_text or "That’s an error" in translated_text):
+                    
+                    # Fetch their real name/data from the main English document
+                    original_text = getattr(emp, field, None)
+                    
+                    if original_text:
+                        emp.translations["hi"][field] = original_text
+                    else:
+                        del emp.translations["hi"][field]
+                        
+                    needs_saving = True
+                    
+        if needs_saving:
+            await emp.save()
+            fixed_count += 1
+            
+    return {
+        "status": "success",
+        "message": f"Scanned {len(employees)} employees. Successfully fixed corrupted data for {fixed_count} profiles."
+    }
+
+# --- Wrong Jobs Translation Cleaner ---
+@router.post("/system/clean-jobs-translations")
 async def clean_corrupted_translations():
     """
     One-time utility to fix jobs where Google's 'Error 500' 
@@ -235,34 +275,76 @@ async def clean_corrupted_translations():
         "message": f"Scanned {len(jobs)} jobs. Successfully fixed corrupted translations in {jobs_fixed_count} jobs."
     }
 
-# --- force Retranslation ---
-@router.post("/system/force-retranslate")
-async def force_retranslate_jobs(background_tasks: BackgroundTasks):
+# --- force Jobs Retranslation ---
+@router.post("/system/bulk-retranslate-jobs")
+async def bulk_retranslate_all_jobs(background_tasks: BackgroundTasks):
     """
-    Finds jobs where the Hindi translation is just the English text,
-    and forces the translation task to run again.
+    Forces the background translation task to run for EVERY job in the database.
+    This ensures all newly added fields and arrays get translated properly.
     """
-    jobs = await Job.find_all().to_list()
-    fixed_count = 0
+    # 1. Fetch ALL jobs from the database
+    all_jobs = await Job.find_all().to_list()
     
-    for job in jobs:
-        # Get the current saved Hindi title
-        hi_title = job.translations.get("hi", {}).get("job_title") if job.translations else None
+    # 2. Define the exact fields we want to make sure are translated
+    fields_to_translate = [
+        "job_title", 
+        "job_category", 
+        "job_description", 
+        "job_city", 
+        "minimum_education",
+        "total_experience_required", 
+        "address", 
+        "communication_preferences", 
+        "skills_preference"
+    ]
+    
+    # 3. Queue them up in the background
+    for job in all_jobs:
+        background_tasks.add_task(
+            translate_document_fields,
+            str(job.id),
+            Job,
+            fields_to_translate,
+            "hi"
+        )
         
-        # If there is no Hindi translation, OR the Hindi translation is exactly the English text
-        if not hi_title or hi_title == job.job_title:
-            
-            # Trigger your existing background task
-            background_tasks.add_task(
-                translate_document_fields,
-                str(job.id),
-                Job,
-                ["job_title", "job_description", "job_category"], # Ensure these match your DB fields
-                "hi"
-            )
-            fixed_count += 1
-
     return {
-        "status": "success", 
-        "message": f"Queued {fixed_count} jobs for background re-translation. Give it a minute to process!"
+        "status": "success",
+        "message": f"Successfully queued {len(all_jobs)} jobs for full translation. Please wait 1-2 minutes for the background threads to finish processing!"
+    }
+
+# --- Force Employee Retranslate ---
+@router.post("/system/bulk-retranslate-employees")
+async def bulk_retranslate_all_employees(background_tasks: BackgroundTasks):
+    """
+    Forces the background translation task to run for EVERY employee in the database,
+    ensuring all nested dictionaries and lists are finally translated.
+    """
+    all_employees = await Employee.find_all().to_list()
+    
+    # We force every translatable field into the background task
+    fields_to_translate = [
+        "name",
+        "title",
+        "summary",
+        "gender",
+        "location_name",
+        "languages",
+        "skills",
+        "education",
+        "preferences"
+    ]
+    
+    for emp in all_employees:
+        background_tasks.add_task(
+            translate_document_fields,
+            str(emp.id),
+            Employee,
+            fields_to_translate,
+            "hi"
+        )
+        
+    return {
+        "status": "success",
+        "message": f"Successfully queued {len(all_employees)} employees for full translation. Wait 1-2 minutes for Google to process!"
     }

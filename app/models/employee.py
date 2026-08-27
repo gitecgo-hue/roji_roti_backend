@@ -181,6 +181,8 @@ class Employee(TranslatableDocument):
     # --- Legacy/Auth (Keeping for compatibility) ---
     last_otp_requested_at: Optional[datetime] = None
 
+    translations: Optional[Dict[str, Dict[str, Any]]] = {}
+
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
     class Settings:

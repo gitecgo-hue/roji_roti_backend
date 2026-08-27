@@ -378,7 +378,19 @@ async def update_employee_profile(
     # ==========================================
     # 6. TRANSLATION & WEBHOOK TRIGGERS
     # ==========================================
-    translatable_db_fields = ["name", "title", "summary"]
+    translatable_db_fields = [
+        "name",
+        "title",
+        "summary",
+        "gender",
+        "location_name",
+        "languages",
+        "skills",
+        "education",
+        "preferences"
+    ]
+    
+    # Only translate the fields that were actually changed in this request
     fields_to_translate = [field for field in update_dict.keys() if field in translatable_db_fields]
     
     if fields_to_translate:

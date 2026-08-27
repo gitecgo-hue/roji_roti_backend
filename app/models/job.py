@@ -1,6 +1,6 @@
 from beanie import Document, Indexed
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
 import pymongo
@@ -125,7 +125,7 @@ class Job(TranslatableDocument):
     shortlisted_count: int = 0
     hires_count: int = 0
 
-    translations: Optional[Dict[str, Dict[str, str]]] = {}
+    translations: Optional[Dict[str, Dict[str, Any]]] = {}
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
 
