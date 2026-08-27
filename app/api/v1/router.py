@@ -12,7 +12,8 @@ from app.api.v1.endpoints import (
     feedback,
     admin,
     payments,
-    websocket
+    websocket,
+    troubleshoot
     )
 
 api_router = APIRouter()
@@ -52,3 +53,6 @@ api_router.include_router(payments.router, prefix="/payments", tags=["Payments"]
 
 # Attach the IVR endpoints
 api_router.include_router(ivr.router, prefix="/ivr", tags=["IVR"])
+
+# Attach the troubleshoot endpoints
+api_router.include_router(troubleshoot.router, prefix="/troubleshoot", tags=["Troubleshoot"])
