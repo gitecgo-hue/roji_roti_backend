@@ -1,7 +1,7 @@
 # --- IMPORTS ---
 from PIL.ImagePalette import random
 from apscheduler import job
-from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks
+from fastapi import APIRouter, File, HTTPException, UploadFile, status, Depends, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 from beanie import PydanticObjectId
@@ -14,11 +14,11 @@ import math
 import re
 
 # --- Core Imports ---
-from app.api.v1.endpoints.employees import calculate_profile_completion
 from app.core.config import settings
 
 # --- Dependencies Imports ---
 from app.api.dependencies import get_current_employer, get_current_employee
+from app.api.v1.endpoints.employees import calculate_profile_completion
 
 # --- Models Imports ---
 from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource, GeoLocation
@@ -47,6 +47,8 @@ from app.services.kyc import KYCService
 # --- Utility Imports ---
 from app.utils.referral import generate_referral_code
 from app.utils.maps import MapService
+from app.utils.translator import translate_document_fields 
+from app.utils.helpers import apply_translations
 
 # --- Schema Imports ---
 from app.schemas.job import JobResponse
@@ -120,19 +122,22 @@ class VerifyEmailUpdateRequest(BaseModel):
 
 # --- EMPLOYER DASHBOARD ---
 @router.get("/dashboard", response_model=EmployerDashboardResponse)
-async def get_employer_dashboard(current_employer: Employer = Depends(get_current_employer)):
+async def get_employer_dashboard(
+    lang: str = Query("en"),
+    current_employer: Employer = Depends(get_current_employer)
+):
     sub = await SubscriptionService.get_active_subscription(str(current_employer.id))
     
     # 1. Fetch all jobs belonging to this employer
     my_jobs = await Job.find(Job.employer_id == str(current_employer.id)).to_list()
     
-    # 2. Calculate Active Jobs (Still calculates the 7 active ones, just in case you need it later)
+    # 2. Calculate Active Jobs
     active_jobs = sum(1 for job in my_jobs if job.status == "published")
     
     # 3. Calculate Total Applicants
     total_applicants = sum(job.applicants_count for job in my_jobs if getattr(job, "applicants_count", 0))
 
-    # 4. Calculate Total Jobs Posted (This is your true 9 jobs)
+    # 4. Calculate Total Jobs Posted 
     total_jobs_posted = len(my_jobs)
     
     # 5. SHORTLISTED COUNT
@@ -143,7 +148,7 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
         {"job_id": {"$in": native_job_ids}, "status": ApplicationStatus.SHORTLISTED}
     ).count()
     
-    # 2nd Attempt fallback: If the Enum fails, try the raw lowercase string
+    # 2nd Attempt fallback
     if shortlisted == 0:
         shortlisted = await JobApplication.find(
             {"job_id": {"$in": native_job_ids}, "status": "shortlisted"}
@@ -159,17 +164,17 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
 
     # 7. Calculate Subscription Days Left
     days_left = max(0, (sub.expiry_date - datetime.utcnow()).days) if sub.expiry_date else 0
+
+    emp_dict = current_employer.model_dump()
+    translated_emp = apply_translations(emp_dict, getattr(current_employer, "translations", {}), lang)
     
     return EmployerDashboardResponse(
-        company_name=current_employer.company_name or current_employer.name,
+        company_name=translated_emp.get("company_name", current_employer.name),
         subscription_tier=sub.plan_type.lower(),        
         is_active=sub.is_active,
         days_left=days_left,
         expiry_date=sub.expiry_date,
-        
-        # THE FIX: We pass 'total_jobs_posted' here so the frontend reads '9' instead of '7'
-        active_jobs_count=total_jobs_posted, 
-        
+        active_jobs_count=total_jobs_posted,        
         total_applicants_count=total_applicants,
         shortlisted_count=shortlisted,
         job_posts_used=total_jobs_posted, 
@@ -179,22 +184,20 @@ async def get_employer_dashboard(current_employer: Employer = Depends(get_curren
 # --- GET PERSONAL PROFILE ---
 @router.get("/profile/personal", response_model=EmployerPersonalProfileResponse)
 async def get_personal_profile(
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Retrieves the individual recruiter/owner's personal details.
-    """
-    return current_employer
+    emp_dict = current_employer.model_dump()
+    return apply_translations(emp_dict, getattr(current_employer, "translations", {}), lang)
 
 # --- GET COMPANY PROFILE ---
 @router.get("/profile/company", response_model=EmployerCompanyProfileResponse)
 async def get_company_profile(
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Retrieves the business/company details.
-    """
-    return current_employer
+    emp_dict = current_employer.model_dump()
+    return apply_translations(emp_dict, getattr(current_employer, "translations", {}), lang)
 
 # --- UPDATE EMPLOYER PROFILE ---
 @router.patch("/profile_update", response_model=dict, status_code=status.HTTP_200_OK)
@@ -203,10 +206,6 @@ async def update_employer_profile(
     background_tasks: BackgroundTasks,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Unified endpoint to update the employer's profile.
-    Separates response into Personal and Company blocks for the UI.
-    """
     update_dict = profile_data.model_dump(exclude_unset=True)
     
     if not update_dict:
@@ -215,17 +214,13 @@ async def update_employer_profile(
             "message": "No changes were provided.",
             "updated_fields": []
         }
-    # =========================================
+
     # GSTIN VERIFICATION LOGIC
-    # =========================================
-    # Reset GSTIN verification if GST number changed
     if "gstin" in update_dict:
         if update_dict["gstin"] != getattr(current_employer, "gstin", None):
             current_employer.gstin_verified = False
 
-    # ==========================================
-    # 2. OLA MAPS AUTO-GEOCODING
-    # ==========================================
+    # OLA MAPS AUTO-GEOCODING
     address_field = update_dict.get("company_address") or update_dict.get("address")
     if address_field:
         try:
@@ -244,18 +239,14 @@ async def update_employer_profile(
         if "company_address" in update_dict:
             del update_dict["company_address"]
 
-    # ==========================================
-    # 3. DIRECT FIELD MAPPING & SAVE
-    # ==========================================
+    # DIRECT FIELD MAPPING & SAVE
     for field, value in update_dict.items():
         if hasattr(current_employer, field) and field != "location":
             setattr(current_employer, field, value)
             
     await current_employer.save()
 
-    # ==========================================
-    # 4. SUBSCRIPTIONS & BACKGROUND TASKS
-    # ==========================================
+    # SUBSCRIPTIONS & BACKGROUND TASKS
     async def setup_new_employer_if_needed(emp_id: str, email: str, name: str):
         existing_sub = await Subscription.find_one({"employer_id": emp_id})
         if not existing_sub:
@@ -281,18 +272,34 @@ async def update_employer_profile(
         getattr(current_employer, "name", "Employer")
     )
 
-    # ==========================================
-    # 5. UI-TAILORED RESPONSE PAYLOAD
-    # ==========================================
+    # TRANSLATION LOGIC BLOCK FOR EMPLOYER PROFILE
+    translatable_db_fields = [
+        "name",
+        "gender",
+        "company_name",
+        "company_type",
+        "industry",
+        "description",
+        "company_address",
+        "address"
+    ]
+    
+    fields_to_translate = [field for field in update_dict.keys() if field in translatable_db_fields]
+    
+    if fields_to_translate:
+        background_tasks.add_task(
+            translate_document_fields,
+            str(current_employer.id), 
+            Employer,
+            fields_to_translate,
+            "hi"
+        )
+
     return {
         "status": "success",
         "message": "Profile updated successfully.",
         "updated_fields": list(update_dict.keys()),
-        
-        # UI Card 1: Basic Details & GST
         "personal_profile": EmployerPersonalProfileResponse.model_validate(current_employer).model_dump(),
-        
-        # UI Card 2: Company Profile
         "company_profile": EmployerCompanyProfileResponse.model_validate(current_employer).model_dump()
     }
 
@@ -300,13 +307,8 @@ async def update_employer_profile(
 @router.post("/profile/upload_logo")
 async def upload_company_logo(
     file: UploadFile = File(...),
-    current_employer = Depends(get_current_employer) # Ensure type hint if needed: current_employer: Employer
+    current_employer = Depends(get_current_employer)
 ):
-    """
-    Uploads a company logo or profile picture for the employer to Cloudinary.
-    Accepts image files (JPEG, PNG, WEBP) up to 5MB.
-    """
-    # 1. Validate the file type
     allowed_content_types = ["image/jpeg", "image/png", "image/webp"]
     if file.content_type not in allowed_content_types:
         raise HTTPException(
@@ -314,23 +316,18 @@ async def upload_company_logo(
             detail="Invalid file type. Please upload a JPEG, PNG, or WEBP image."
         )
         
-    # 2. Validate file size - e.g., max 5MB
-    file.file.seek(0, 2) # Go to the end of the file
-    file_size = file.file.tell() # Get the size
-    file.file.seek(0) # Reset the cursor back to the beginning for reading
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
     
-    if file_size > 5 * 1024 * 1024: # 5 Megabytes
+    if file_size > 5 * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File size too large. Maximum size is 5MB."
         )
 
-    # 3. Upload to Cloudinary
     try:
-        # We pass a specific folder name to keep your Cloudinary dashboard organized
         uploaded_url = await upload_file(file, folder_name="employer_logos")
-        
-        # 4. Update the employer's profile in the database
         current_employer.logo_url = uploaded_url
         await current_employer.save()
         
@@ -340,24 +337,19 @@ async def upload_company_logo(
         }
         
     except ValueError as e:
-        # Catches the error thrown by our Cloudinary service
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Profile Photo/Logo Deletion ---
 @router.delete("/profile_delete_logo", status_code=status.HTTP_200_OK)
 async def delete_employer_profile_picture(
-    current_employer = Depends(get_current_employer) # type: Employer
+    current_employer = Depends(get_current_employer)
 ):
-    """
-    Deletes the logged-in employer's profile picture from Cloudinary and the database.
-    """
     if not current_employer.profile_picture_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="You do not have a profile picture to delete."
         )
 
-    # 1. Delete from Cloudinary
     deletion_successful = delete_file(current_employer.profile_picture_url)
     
     if not deletion_successful:
@@ -366,7 +358,6 @@ async def delete_employer_profile_picture(
             detail="Failed to delete the image from the cloud provider."
         )
 
-    # 2. Remove the URL from the database and save
     current_employer.profile_picture_url = None
     await current_employer.save()
 
@@ -378,9 +369,6 @@ async def request_phone_update_otp(
     data: RequestPhoneUpdate,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Step 1: Validates the new phone number isn't in use and sends an OTP to it.
-    """
     clean_new_phone = data.new_phone[-10:]
 
     if current_employer.phone == clean_new_phone:
@@ -415,15 +403,11 @@ async def request_phone_update_otp(
         "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
     }
 
-
 @router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
 async def update_employer_phone(
     data: VerifyPhoneUpdate,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Step 2: Verifies the OTP and permanently updates the Employer's phone number.
-    """
     clean_new_phone = data.new_phone[-10:]
 
     if current_employer.phone == clean_new_phone:
@@ -447,11 +431,9 @@ async def update_employer_phone(
             detail="Invalid or expired OTP for the new phone number."
         )
 
-    # Consume the OTP so it cannot be reused
     otp_record.code = None
     await otp_record.save()
 
-    # Update the employer profile
     current_employer.phone = clean_new_phone
     if hasattr(current_employer, "updated_at"):
         current_employer.updated_at = datetime.now(timezone.utc)
@@ -470,32 +452,21 @@ async def request_email_update_otp(
     data: EmailUpdateRequest,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Step 1: Takes the new email, validates it isn't in use, and sends an OTP to it.
-    """
     clean_email = data.email.lower().strip()
 
-    # 1. Check if the email is already in use by another employee
     existing_user = await Employer.find_one(Employer.email == clean_email)
     if existing_user:
         raise HTTPException(status_code=400, detail="This email is already associated with another account.")
 
-    # 2. Generate a 4-digit
     DEV_MODE = True
     otp_code = "1234" if DEV_MODE else str(py_random.randint(1000, 9999))
 
-    # 3. Save OTP to the database (Assuming your OTP model supports an 'identifier' or 'email' field)
-    # If your model uses 'phone' for everything, you might need to map it to 'identifier'
     await OTP(
         phone=clean_email,
         code=otp_code, 
         user_type="employer"
     ).insert()
-
-    # 4. Trigger your email sending logic here (e.g., using a NotificationService or EmailService)
-    # await EmailService.send_otp_email(clean_email, otp_code)
     
-    # FOR TESTING ONLY: Print the OTP to the console so you can test it without a real email server
     print(f"EMAIL OTP FOR {clean_email} IS: {otp_code}")
 
     return {
@@ -503,43 +474,26 @@ async def request_email_update_otp(
         "message": f"An OTP has been sent to {clean_email}. Please verify to update your email."
     }
 
-# --- EMAIL VERIFICATION & UPDATE ---
 @router.patch("/profile/email/verify_and_update", response_model=dict)
 async def verify_and_update_email(
     data: VerifyEmailUpdateRequest,
-    current_employer: Employer = Depends(get_current_employer) # Ensure this is your employer dependency
+    current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Step 2: Verifies the OTP. If valid, updates the employer's email and marks it as verified.
-    """
     clean_email = data.email.lower().strip()
 
-    # ==========================================
-    # 1. VERIFY OTP 
-    # ==========================================
     DEV_MODE = True
     MASTER_OTP = "1234"
 
     if DEV_MODE and data.otp_code == MASTER_OTP:
         print(f"⚠️ DEV BYPASS USED: Email updated to {clean_email}")
     else:
-        # Check the OTP collection where we stored the email in the phone field
         otp_record = await OTP.find_one(OTP.phone == clean_email)
-        
         if not otp_record or otp_record.code != data.otp_code:
             raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
-            
-        # Consume (delete) the OTP
         await otp_record.delete()
-    # ==========================================
 
-    # 2. UPDATE THE EMPLOYER FIELDS
     current_employer.email = clean_email
     current_employer.email_verified = True 
-
-    # (Notice we completely removed the metadata/profile_score logic here!)
-
-    # 3. SAVE TO DATABASE
     await current_employer.save()
 
     return {
@@ -558,10 +512,7 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
     if not employer:
         raise HTTPException(status_code=404, detail="Employer not found")
 
-    # Save the documents
     employer.kyc_documents = data.model_dump()
-
-    # Trigger Automated Verification
     is_verified, remarks = await KYCService.automated_verify(employer.kyc_documents)
 
     if is_verified:
@@ -571,7 +522,6 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
         employer.kyc_remarks = remarks
         employer.is_verified = True 
     else:
-        # Automated failed -> Send to Admin Queue
         employer.kyc_status = KYCStatus.PENDING
         employer.kyc_remarks = f"Auto-verify failed: {remarks}. Awaiting manual admin review."
         employer.is_verified = False
@@ -579,12 +529,12 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
     await employer.save()
 
     await NotificationService.notify_user(
-    user_id="ADMIN_BROADCAST",
-    title="Action Required: New KYC Submission",
-    message=f"Employer '{employer.company_name}' has submitted their KYC documents for review.",
-    notif_type=NotificationType.KYC_SUBMITTED,
-    related_entity_id=str(employer.id)
-)
+        user_id="ADMIN_BROADCAST",
+        title="Action Required: New KYC Submission",
+        message=f"Employer '{employer.company_name}' has submitted their KYC documents for review.",
+        notif_type=NotificationType.KYC_SUBMITTED,
+        related_entity_id=str(employer.id)
+    )
     
     return {
         "status": "success", 
@@ -593,17 +543,13 @@ async def submit_kyc(data: KYCSubmitRequest, current_user_id: str = Depends(get_
     }
 
 # --- My Posted Job List ---
-@router.get("/my_jobs", response_model=List[JobResponse])
+@router.get("/my_jobs", response_model=List[dict])
 async def get_my_jobs(
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Retrieves a list of all job posts created by the currently logged-in employer,
-    including real-time dynamic applicant statistics.
-    """
     employer_id_str = str(current_employer.id)
     
-    # 1. Fetch all jobs for this employer
     my_jobs = await Job.find({
         "$or": [
             {"employer_id": employer_id_str},
@@ -614,11 +560,9 @@ async def get_my_jobs(
     if not my_jobs:
         return []
 
-    # 2. Extract job IDs in both String and ObjectId formats
     job_ids_str = [str(job.id) for job in my_jobs]
     job_ids_obj = [job.id for job in my_jobs]
 
-    # 3. Fetch ALL applications for ALL these jobs in ONE single query
     all_applications = await JobApplication.find({
         "$or": [
             {"job_id": {"$in": job_ids_str}},
@@ -626,49 +570,40 @@ async def get_my_jobs(
         ]
     }).to_list()
 
-    # 4. Create a dictionary to hold our real-time tallies
-    # Format: {"job_id_123": {"applicants": 0, "shortlisted": 0, "hires": 0}}
     stats = {jid: {"applicants": 0, "shortlisted": 0, "hires": 0} for jid in job_ids_str}
 
-    # 5. Loop through the applications once and count them up
     for app in all_applications:
         jid = str(app.job_id)
         if jid in stats:
             stats[jid]["applicants"] += 1
-            
-            # Convert status to a lowercase string safely to catch both Enums and raw strings
             status_str = str(getattr(app, "status", "")).lower()
-            
             if "shortlisted" in status_str:
                 stats[jid]["shortlisted"] += 1
             elif "hired" in status_str:
                 stats[jid]["hires"] += 1
 
-    # 6. Inject the tallies into the job dictionaries and return
     response_list = []
     for job in my_jobs:
-        # Dump to dictionary to bypass the strict Pydantic serializer
         job_dict = job.model_dump() if hasattr(job, "model_dump") else dict(job)
         
-        jid = str(job.id)
+        # APPLY TRANSLATIONS TO THE JOB!
+        job_dict = apply_translations(job_dict, getattr(job, "translations", {}), lang)
         
-        # Inject the live stats
+        jid = str(job.id)
         job_dict["applicants_count"] = stats[jid]["applicants"]
         job_dict["shortlisted_count"] = stats[jid]["shortlisted"]
         job_dict["hires_count"] = stats[jid]["hires"]
-        
-        # Ensure views_count doesn't return None
         job_dict["views_count"] = getattr(job, "views_count", 0) or 0
         
         response_list.append(job_dict)
 
-    # FastAPI will perfectly map this list of dictionaries to List[JobResponse]
     return response_list
 
 # --- CORE RECRUITMENT FLOW (ATS) ---
 @router.get("/jobs/{job_id}/applicants", response_model=List[dict])
 async def list_job_applicants(
     job_id: str, 
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
     try:
@@ -690,14 +625,21 @@ async def list_job_applicants(
     for app in applications:
         employee = await Employee.get(PydanticObjectId(app.employee_id))
         
+        # Extract and translate employee data safely
+        emp_category = "N/A"
+        emp_name = "Deleted Employee"
+        
+        if employee:
+            emp_dict = employee.model_dump()
+            translated_emp = apply_translations(emp_dict, getattr(employee, "translations", {}), lang)
+            emp_name = translated_emp.get("name", employee.name)
+            emp_category = translated_emp.get("job_category", getattr(employee, "job_category", "N/A"))
+        
         results.append({
             "application_id": str(app.id),
             "employee_id": str(app.employee_id),
-            "employee_name": employee.name if employee else "Deleted Employee",
-            
-            # --- FIXED CRASH SAFEGUARD ---
-            "employee_category": getattr(employee, "job_category", "N/A") if employee else "N/A",
-
+            "employee_name": emp_name,
+            "employee_category": emp_category,
             "employee_email": employee.email if employee else "N/A",
             "employee_phone": employee.phone if employee else "N/A", 
             "status": getattr(app, "status", "applied"),
@@ -713,7 +655,6 @@ async def update_application_status(
     request: ApplicationStatusUpdate, 
     current_employer: Employer = Depends(get_current_employer)
 ):
-    # Validate and fetch the application
     try:
         app_record = await JobApplication.get(PydanticObjectId(application_id))
     except Exception:
@@ -722,7 +663,6 @@ async def update_application_status(
     if not app_record:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    # Fetch the job and verify ownership
     job = await Job.get(PydanticObjectId(app_record.job_id))
     if not job or str(job.employer_id) != str(current_employer.id):
         raise HTTPException(
@@ -730,17 +670,14 @@ async def update_application_status(
             detail="Unauthorized to update this application."
         )
 
-    # Update application status
     app_record.status = request.new_status
     if hasattr(app_record, "updated_at"):
         app_record.updated_at = datetime.utcnow()
     await app_record.save()
 
-    # Safely get the string value of the status (handles both Enum and standard string)
     status_str = request.new_status.value if hasattr(request.new_status, 'value') else request.new_status
     job_closed = False
 
-    # Handle "HIRED" logic (closing the job)
     if status_str.lower() == "hired":
         job.is_active = False
         if hasattr(job, "status"):
@@ -748,7 +685,6 @@ async def update_application_status(
         await job.save()
         job_closed = True
 
-    # Determine the notification title and message dynamically
     job_title = job.job_title if job else "a recent job" 
        
     if status_str.lower() == "hired":
@@ -764,7 +700,6 @@ async def update_application_status(
         title = "Application Status Updated"
         message = f"Your application for '{job_title}' is now marked as {status_str}."
 
-    # Fire the unified notification via the Service
     await NotificationService.notify_user(
         user_id=str(app_record.employee_id),
         title=title,
@@ -795,10 +730,6 @@ async def unlock_employee_contact(employee_id: str, current_employer: Employer =
 # --- DISCOVERY, SEARCH & ACTIONS ---
 @router.post("/employee-search")
 async def search_employees(filters: EmployeeSearchFilter):
-    """
-    Advanced Paginated Employee Search.
-    """
-    # Build the query
     query = {"is_looking_for_job": True}
     
     if filters.category:
@@ -808,21 +739,11 @@ async def search_employees(filters: EmployeeSearchFilter):
     if filters.city:
         query["location_name"] = filters.city
         
-    # Count TOTAL matching documents first (before limiting)
-    # The frontend needs this to calculate how many pages exist
     total_matches = await Employee.find(query).count()
-    
-    # Calculate how many documents to skip
-    # Example: Page 1 skips 0. Page 2 skips 20. Page 3 skips 40.
     skip_count = (filters.page - 1) * filters.limit
-    
-    # Fetch ONLY the requested chunk using .skip() and .limit()
     matching_employees = await Employee.find(query).skip(skip_count).limit(filters.limit).to_list()
-    
-    # Calculate total pages
     total_pages = math.ceil(total_matches / filters.limit) if total_matches > 0 else 1
     
-    # Return standard paginated response
     return {
         "pagination": {
             "current_page": filters.page,
@@ -838,9 +759,9 @@ async def search_employees(filters: EmployeeSearchFilter):
 # --- Get Saved Searches ---
 @router.get("/database/saved-searches", response_model=List[SavedSearchResponse])
 async def get_saved_searches(
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Retrieves all saved searches for the current employer."""
     searches = await SavedSearch.find({"employer_id": str(current_employer.id)}).sort("-created_at").to_list()
     
     response = []
@@ -857,7 +778,6 @@ async def save_candidate_search(
     save_data: SavedSearchCreate,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Saves a search query for later use."""
     new_saved_search = SavedSearch(
         employer_id=str(current_employer.id),
         title=save_data.title,
@@ -865,7 +785,6 @@ async def save_candidate_search(
     )
     await new_saved_search.insert()
     
-    # Map for response
     response_data = new_saved_search.model_dump()
     response_data["id"] = str(new_saved_search.id)
     return response_data
@@ -921,27 +840,23 @@ async def update_billing_profile(
     profile_data: BillingProfileUpdateRequest,
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Updates the employer's GSTIN and billing address."""
     if profile_data.gstin is not None:
         current_employer.gstin = profile_data.gstin
     if profile_data.billing_address is not None:
         current_employer.billing_address = profile_data.billing_address
         
     await current_employer.save()
-    
     return {"message": "Billing profile updated successfully", "gstin": current_employer.gstin}
 
 # --- CREDITS & USAGE (Virtual Coins Ledger) ---
 @router.get("/credits/transactions", response_model=List[TransactionResponse])
 async def get_credit_transactions(
-    # Optional filter to match frontend tabs (Coins added, Coins spent, etc.)
+    lang: str = Query("en"),
     tab_filter: Optional[str] = None, 
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Fetches the coin transaction history for the Credits & Usage tab."""
     query = {"employer_id": str(current_employer.id)}
     
-    # Map frontend tab clicks to database transaction types
     if tab_filter == "added":
         query["transaction_type"] = "added"
     elif tab_filter == "spent":
@@ -955,7 +870,6 @@ async def get_credit_transactions(
     for txn in transactions:
         txn_dict = txn.model_dump()
         txn_dict["id"] = str(txn.id)
-        # Format the description string safely
         txn_dict["amount"] = f"+ {txn.amount}" if txn.amount > 0 else f"- {abs(txn.amount)}"
         response.append(txn_dict)
         
@@ -964,10 +878,10 @@ async def get_credit_transactions(
 # --- BILLING HISTORY (Real Money Purchases) ---
 @router.get("/billing/history", response_model=List[PaymentResponse])
 async def get_billing_history(
-    status_filter: Optional[str] = None, # "success", "pending", "failed"
+    lang: str = Query("en"),
+    status_filter: Optional[str] = None, 
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """Fetches the real-world purchase history for the Billing tab."""
     query = {"employer_id": str(current_employer.id)}
     
     if status_filter and status_filter.lower() != "all":
@@ -986,29 +900,20 @@ async def get_billing_history(
 # --- REFERRAL DASHBOARD ---
 @router.get("/refer", response_model=ReferralDashboardResponse)
 async def get_referral_dashboard(
+    lang: str = Query("en"),
     current_employer: Employer = Depends(get_current_employer)
 ):
-    """
-    Provides data for the Refer & Earn frontend tab.
-    """
-    # Check if the field exists using getattr
     current_code = getattr(current_employer, "referral_code", None)
 
     if not current_code:
-        # Generate the new code
         new_code = generate_referral_code()
-        
-        # 100% bypasses Pydantic by sending a raw PyMongo update command
         await current_employer.update({"$set": {"referral_code": new_code}})
-        
         current_code = new_code
 
-    # Count how many users have signed up using this employer's code
     total_referred = await Employer.find(
         {"referred_by_code": current_code}
     ).count()
     
-    # Calculate total coins earned from referrals using the Transaction ledger
     referral_transactions = await Transaction.find(
         {"employer_id": str(current_employer.id), "title": "Referral Bonus"}
     ).to_list()

@@ -6,6 +6,7 @@ from app.api.dependencies import get_current_admin
 
 # --- Model Import ---
 from app.models.employee import Employee
+from app.models.employer import Employer
 from app.models.job import Job
 
 #--- Util Import ---
@@ -275,6 +276,76 @@ async def clean_corrupted_translations():
         "message": f"Scanned {len(jobs)} jobs. Successfully fixed corrupted translations in {jobs_fixed_count} jobs."
     }
 
+# --- Force Employee Retranslate ---
+@router.post("/system/bulk-retranslate-employees")
+async def bulk_retranslate_all_employees(background_tasks: BackgroundTasks):
+    """
+    Forces the background translation task to run for EVERY employee in the database,
+    ensuring all nested dictionaries and lists are finally translated.
+    """
+    all_employees = await Employee.find_all().to_list()
+    
+    # We force every translatable field into the background task
+    fields_to_translate = [
+        "name",
+        "title",
+        "summary",
+        "gender",
+        "location_name",
+        "languages",
+        "skills",
+        "education",
+        "preferences"
+    ]
+    
+    for emp in all_employees:
+        background_tasks.add_task(
+            translate_document_fields,
+            str(emp.id),
+            Employee,
+            fields_to_translate,
+            "hi"
+        )
+        
+    return {
+        "status": "success",
+        "message": f"Successfully queued {len(all_employees)} employees for full translation. Wait 1-2 minutes for Google to process!"
+    }
+
+# --- Force Employer Retranslate ---
+@router.post("/system/bulk-retranslate-employers")
+async def bulk_retranslate_all_employers(background_tasks: BackgroundTasks):
+    """
+    Forces the background translation task to run for EVERY Employer in the database.
+    """
+    all_employers = await Employer.find_all().to_list()
+    
+    # Adjust these to match your actual Employer model fields
+    fields_to_translate = [
+        "name",
+        "gender",
+        "company_name",
+        "company_type",
+        "industry",
+        "description",
+        "company_address",
+        "address"
+    ]
+    
+    for emp in all_employers:
+        background_tasks.add_task(
+            translate_document_fields,
+            str(emp.id),
+            Employer,
+            fields_to_translate,
+            "hi"
+        )
+        
+    return {
+        "status": "success",
+        "message": f"Successfully queued {len(all_employers)} employers for full translation. Wait 1-2 minutes!"
+    }
+
 # --- force Jobs Retranslation ---
 @router.post("/system/bulk-retranslate-jobs")
 async def bulk_retranslate_all_jobs(background_tasks: BackgroundTasks):
@@ -311,40 +382,4 @@ async def bulk_retranslate_all_jobs(background_tasks: BackgroundTasks):
     return {
         "status": "success",
         "message": f"Successfully queued {len(all_jobs)} jobs for full translation. Please wait 1-2 minutes for the background threads to finish processing!"
-    }
-
-# --- Force Employee Retranslate ---
-@router.post("/system/bulk-retranslate-employees")
-async def bulk_retranslate_all_employees(background_tasks: BackgroundTasks):
-    """
-    Forces the background translation task to run for EVERY employee in the database,
-    ensuring all nested dictionaries and lists are finally translated.
-    """
-    all_employees = await Employee.find_all().to_list()
-    
-    # We force every translatable field into the background task
-    fields_to_translate = [
-        "name",
-        "title",
-        "summary",
-        "gender",
-        "location_name",
-        "languages",
-        "skills",
-        "education",
-        "preferences"
-    ]
-    
-    for emp in all_employees:
-        background_tasks.add_task(
-            translate_document_fields,
-            str(emp.id),
-            Employee,
-            fields_to_translate,
-            "hi"
-        )
-        
-    return {
-        "status": "success",
-        "message": f"Successfully queued {len(all_employees)} employees for full translation. Wait 1-2 minutes for Google to process!"
     }

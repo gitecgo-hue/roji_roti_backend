@@ -1,6 +1,6 @@
 from beanie import Indexed, before_event, Replace, Save, Update
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -89,6 +89,8 @@ class Employer(TranslatableDocument):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+    translations: Optional[Dict[str, Dict[str, Any]]] = {}
 
     @before_event(Replace, Save, Update)
     def update_timestamp(self):

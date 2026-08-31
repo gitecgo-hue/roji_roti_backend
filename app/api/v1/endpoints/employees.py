@@ -1133,7 +1133,24 @@ async def get_all_categories(lang: str = Depends(get_user_language)):
     """
     categories = await Category.find(Category.is_active == True).to_list()
     # Assuming the Category model is also a TranslatableDocument
-    return [c.localize(lang_code=lang).get("name", c.name) for c in categories]
+    localized_categories = []
+    
+    for c in categories:
+        # 1. Check if the localize method exists (just in case you add it later)
+        if hasattr(c, "localize"):
+            loc_name = c.localize(lang_code=lang).get("name", c.name)
+        
+        # 2. Fallback: Manually check the translations dictionary safely
+        elif getattr(c, "translations", None) and lang in c.translations:
+            loc_name = c.translations[lang].get("name", c.name)
+            
+        # 3. Default: Just use the standard English name
+        else:
+            loc_name = getattr(c, "name", "Unknown Category")
+            
+        localized_categories.append(loc_name)
+        
+    return localized_categories
 
 # --- Reviews & Feedback ---
 @router.get("/{employee_id}/reviews", response_model=List[dict])
