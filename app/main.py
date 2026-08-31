@@ -69,7 +69,6 @@ def rate_limit_exceeded_handler(request: Request, exc: Exception):
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-# List all the domains your frontend will run on
 origins = [
     "http://localhost:8080",      
     "http://127.0.0.1:8080",
