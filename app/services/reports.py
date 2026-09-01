@@ -9,14 +9,15 @@ class ReportService:
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         
         # Total raw registrations today
-        total_today = await Employee.find(Employee.created_at >= today).count()
+        total_today = await Employee.find({"metadata.created_at": {"$gte": today}}).count()
         
         # Employees who registered today AND are approved/visible
-        live_today = await Employee.find(
-            Employee.created_at >= today,
-            Employee.is_approved == True,
-            Employee.availability_status == True
-        ).count()
+        # THE FIX: Converted all conditions into standard MongoDB dictionary syntax
+        live_today = await Employee.find({
+            "metadata.created_at": {"$gte": today},
+            "is_approved": True,
+            "availability_status": True
+        }).count()
         
         return {
             "date": today.strftime("%Y-%m-%d"),
@@ -28,7 +29,7 @@ class ReportService:
     async def get_referral_stats():
         """Aggregates the 'Referred Employee' report' broken down by job category."""
         # 1. Total count
-        total_referred = await Employee.find(Employee.referred_by_id != None).count()
+        total_referred = await Employee.find({"referred_by_id": {"$ne": None}}).count()
         
         # 2. MongoDB Aggregation to group by category
         pipeline = [

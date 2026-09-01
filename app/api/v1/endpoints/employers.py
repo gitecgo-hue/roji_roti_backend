@@ -21,6 +21,7 @@ from app.api.dependencies import get_current_employer, get_current_employee
 from app.api.v1.endpoints.employees import calculate_profile_completion
 
 # --- Models Imports ---
+from app.models.admin import Admin
 from app.models.employer import Employer, EmployerType, SubscriptionTier, KYCStatus, VerificationSource, GeoLocation
 from app.models.employee import Employee, ProfileMetadata, Skill, Education, ProfileDocument
 from app.models.subscriptions import Subscription
@@ -377,7 +378,12 @@ async def request_phone_update_otp(
             detail="This is already your current phone number."
         )
 
-    phone_taken = await Employer.find_one({"phone": clean_new_phone})
+    # Cross-collection uniqueness check including Admin
+    phone_taken = (
+        await Employer.find_one({"phone": clean_new_phone}) or 
+        await Employee.find_one({"phone": clean_new_phone}) or
+        await Admin.find_one({"phone": clean_new_phone})
+    )
     if phone_taken:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, 
@@ -416,19 +422,24 @@ async def update_employer_phone(
             detail="This is already your current phone number."
         )
 
-    phone_taken = await Employer.find_one({"phone": clean_new_phone})
-    if phone_taken:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, 
-            detail="This phone number is already registered to another account."
-        )
-
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="Invalid or expired OTP for the new phone number."
+        )
+
+    # Double-check database lock at the time of verification including Admin
+    phone_taken = (
+        await Employer.find_one({"phone": clean_new_phone}) or 
+        await Employee.find_one({"phone": clean_new_phone}) or
+        await Admin.find_one({"phone": clean_new_phone})
+    )
+    if phone_taken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail="This phone number was just registered by another account."
         )
 
     otp_record.code = None
@@ -454,9 +465,18 @@ async def request_email_update_otp(
 ):
     clean_email = data.email.lower().strip()
 
-    existing_user = await Employer.find_one(Employer.email == clean_email)
+    # Prevent sending OTP if it's already their current email
+    if current_employer.email and current_employer.email.lower() == clean_email:
+        raise HTTPException(status_code=400, detail="This is already your current email address.")
+
+    # Cross-collection uniqueness check including Admin
+    existing_user = (
+        await Employer.find_one({"email": clean_email}) or 
+        await Employee.find_one({"email": clean_email}) or
+        await Admin.find_one({"email": clean_email})
+    )
     if existing_user:
-        raise HTTPException(status_code=400, detail="This email is already associated with another account.")
+        raise HTTPException(status_code=409, detail="This email is already associated with another account.")
 
     DEV_MODE = True
     otp_code = "1234" if DEV_MODE else str(py_random.randint(1000, 9999))
@@ -491,6 +511,15 @@ async def verify_and_update_email(
         if not otp_record or otp_record.code != data.otp_code:
             raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
         await otp_record.delete()
+
+    # Double-check database lock at the time of verification including Admin
+    email_taken = (
+        await Employer.find_one({"email": clean_email}) or 
+        await Employee.find_one({"email": clean_email}) or
+        await Admin.find_one({"email": clean_email})
+    )
+    if email_taken:
+        raise HTTPException(status_code=409, detail="This email was just registered by another account.")
 
     current_employer.email = clean_email
     current_employer.email_verified = True 

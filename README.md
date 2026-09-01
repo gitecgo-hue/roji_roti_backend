@@ -5,7 +5,7 @@
 ![MongoDB](https://img.shields.io/badge/MongoDB_Atlas-Cloud-47A248.svg)
 ![Authentication](https://img.shields.io/badge/Auth-JWT%20%7C%20OTP-critical)
 
-**Roji Roti** is a localized, high-performance platform built to bridge the gap between blue-collar workers (carpenters, plumbers, electricians, drivers, masons) and employers in India. 
+**Roji Roti** is a localized, high-performance platform built to bridge the gap between blue-collar employees (carpenters, plumbers, electricians, drivers, masons) and employers in India. 
 
 This repository houses the **FastAPI backend**, engineered for high concurrency, real-time data processing, and seamless third-party integrations (Razorpay, SMS/OTP, PDF generation).
 
@@ -13,22 +13,22 @@ This repository houses the **FastAPI backend**, engineered for high concurrency,
 
 ## ✨ Comprehensive Feature Breakdown
 
-### 👷 For Workers (Employees)
+### 👷 For Employees
 * **Seamless Authentication Flow:** Intelligent login system that detects unregistered numbers and securely redirects them to the signup page. Supports 6-digit OTP and encrypted password login.
-* **Geospatial Job Discovery:** Utilizes MongoDB geospatial queries to fetch jobs within a specific radius of the worker's current location.
-* **Smart Recommendations:** Algorithmically suggests jobs based on the worker's selected trade category and daily rate expectations.
+* **Geospatial Job Discovery:** Utilizes MongoDB geospatial queries to fetch jobs within a specific radius of the employee's current location.
+* **Smart Recommendations:** Algorithmically suggests jobs based on the employee's selected trade category and daily rate expectations.
 * **One-Click Applications:** Apply to jobs instantly. The system prevents duplicate applications and tracks states (Pending, Shortlisted, Hired, Rejected).
 * **Automated CV Generation:** Dynamically generates professional PDF resumes using `ReportLab`, pulling real-time profile data, ratings, and completed job history.
-* **Dashboard Analytics:** Real-time stats showing workers how many employers have viewed or "unlocked" their profile.
-* **Availability Toggle:** Workers can easily toggle their "Available for Work" status, instantly updating their visibility in employer search results.
+* **Dashboard Analytics:** Real-time stats showing employees how many employers have viewed or "unlocked" their profile.
+* **Availability Toggle:** employees can easily toggle their "Available for Work" status, instantly updating their visibility in employer search results.
 
 ### 🏢 For Employers
 * **Dual Entity Registration:** Distinct data models supporting both Individual homeowners and Corporate construction/logistics companies.
 * **Job Lifecycle Management:** Post jobs with exact salary brackets, review applicants, update candidate statuses, and automatically close jobs when a candidate is successfully hired.
-* **Worker Database Search:** Granular search queries allowing employers to filter the worker database by category, location, and minimum star rating.
-* **Contact Unlocking (Premium):** A monetization feature where employers pay to unlock a worker's direct phone number.
+* **Employee Database Search:** Granular search queries allowing employers to filter the employee database by category, location, and minimum star rating.
+* **Contact Unlocking (Premium):** A monetization feature where employers pay to unlock a employee's direct phone number.
 * **Automated PDF Receipts:** Automatically generates downloadable transaction receipts immediately after a successful Razorpay payment.
-* **Worker Rating System:** Leave a 1 to 5-star rating and written review for workers upon job completion, updating the worker's global average.
+* **Employee Rating System:** Leave a 1 to 5-star rating and written review for employees upon job completion, updating the employee's global average.
 
 ### 🛡️ Core System & Security Mechanics
 * **Self-Healing Database:** Automatically seeds essential database categories (Trades) upon server startup if the collection is empty.
@@ -127,8 +127,8 @@ FastAPI automatically generates interactive documentation based on the OpenAPI s
 | :--- | :--- | :--- | :--- |
 | **Auth** | `POST` | `/api/v1/auth/login` | Unified login (Handles unregistered routing) |
 | **Auth** | `POST` | `/api/v1/auth/request-otp` | Request SMS/Email OTP (Rate Limited) |
-| **Worker** | `GET` | `/api/v1/employees/jobs` | Get targeted job feed for worker |
-| **Worker** | `GET` | `/api/v1/employees/me/resume` | Download dynamic PDF CV |
+| **Employee** | `GET` | `/api/v1/employees/jobs` | Get targeted job feed for employee |
+| **Employee** | `GET` | `/api/v1/employees/me/resume` | Download dynamic PDF CV |
 | **Employer** | `POST` | `/api/v1/employers/jobs` | Post a new local job |
 | **Employer** | `PATCH`| `/api/v1/employers/applications/{id}/status` | Hire, Reject, or Shortlist an applicant |
 | **Payments** | `POST` | `/api/v1/payments/create-order` | Initialize Razorpay transaction |
@@ -165,9 +165,9 @@ To deploy this backend to a live server (like Render, Heroku, or AWS):
 1. **Remove the `--reload` flag:** Do not use reload in production.
 2. **Update CORS:** In `main.py`, change `allow_origins=["*"]` to your actual frontend domain (e.g., `https://rojiroti.com`).
 3. **Whitelist IPs:** Ensure your cloud provider's IP address is whitelisted in your MongoDB Atlas settings.
-4. **Start Command:** Use Gunicorn with Uvicorn workers for production stability:
+4. **Start Command:** Use Gunicorn with Uvicorn employee for production stability:
    ```bash
-   gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
+   gunicorn app.main:app -w 4 -k uvicorn.employees.UvicornEmployer
    ```
 
 ---
@@ -175,7 +175,7 @@ To deploy this backend to a live server (like Render, Heroku, or AWS):
 ## 🤝 Future Roadmap
 - [ ] **Mapping Integration:** Integrate local Indian mapping APIs (Mappls/Ola Maps) for precise routing and address auto-completion.
 - [ ] **WhatsApp Bot:** Implement WhatsApp Business API integration for offline job notifications and basic application commands via text.
-- [ ] **In-App Chat:** Build WebSocket endpoints for real-time messaging between employers and shortlisted workers.
+- [ ] **In-App Chat:** Build WebSocket endpoints for real-time messaging between employers and shortlisted employees.
 
 ---
 

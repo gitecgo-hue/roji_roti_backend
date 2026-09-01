@@ -22,7 +22,7 @@ async def create_user():
     print("\nWhich type of account do you want to create?")
     print("1. Root Admin (Platform Manager)")
     print("2. Employer (Job Poster / Company)")
-    print("3. Employee (Blue-Collar Worker)")
+    print("3. Employee (Blue-Collar Employee)")
     
     choice = input("\nEnter 1, 2, or 3: ").strip()
     
@@ -74,7 +74,7 @@ async def create_user():
         extra_data["employer_type"] = "company" 
         
     elif selected_role == "Employee":
-        extra_data["category"] = input("Enter Trade Category (e.g., Plumber, Electrician): ").strip() or "General Worker"
+        extra_data["category"] = input("Enter Trade Category (e.g., Plumber, Electrician): ").strip() or "General Employee"
         extra_data["location_name"] = input("Enter City/Location [Default: Indore]: ").strip() or "Indore"
         # Mocking a basic GeoLocation so Pydantic doesn't crash during setup
         extra_data["current_location"] = {"type": "Point", "coordinates": [75.8577, 22.7196]} 
@@ -104,7 +104,7 @@ async def create_user():
         if await Employee.find_one({"phone": phone}):
             print(f"⚠️ An {selected_role} with phone {phone} already exists!")
             return
-        # Bypassing KYC for test workers so they show up in searches immediately
+        # Bypassing KYC for test employee so they show up in searches immediately
         new_user = Employee(name=name, phone=phone, is_active=True, is_approved=True, kyc_status="VERIFIED", **extra_data)
 
     # Save to the database

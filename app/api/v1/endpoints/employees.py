@@ -41,6 +41,7 @@ from app.schemas.employee import (
 from app.schemas.employer import CompanyProfilePublicResponse
 
 # --- Models Imports ---
+from app.models.admin import Admin
 from app.models.employer import Employer, EmployerType
 from app.models.employee import (
     EmployeeProfileUpdate,
@@ -556,26 +557,23 @@ async def send_phone_update_otp(
     data: SendUpdateOtpRequest,
     current_employee: Employee = Depends(get_current_employee)
 ):
-    """
-    Generates and sends an OTP to the new phone number the user wants to switch to.
-    Checks if the number is available before sending.
-    """
     clean_new_phone = data.new_phone[-10:]
     
-    # 1. Check if the user is typing their current number
     if current_employee.phone == clean_new_phone:
         raise HTTPException(status_code=400, detail="This is already your current phone number.")
     
-    # 2. Check if the new phone is already in use by someone else
-    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or await Employee.find_one({"phone": clean_new_phone})
+    # 2. Check Employee, Employer, and Admin collections
+    phone_taken = (
+        await Employee.find_one({"phone": clean_new_phone}) or 
+        await Employer.find_one({"phone": clean_new_phone}) or
+        await Admin.find_one({"phone": clean_new_phone})
+    )
     if phone_taken:
         raise HTTPException(status_code=409, detail="This phone number is already registered to another account.")
 
-    # 3. Generate a 4-digit OTP (Changed from 100000, 999999)
     DEV_MODE = True
     otp_code = "1234" if DEV_MODE else str(random.randint(1000, 9999))
     
-    # 4. Save it to the database
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     if otp_record:
         otp_record.code = otp_code
@@ -583,14 +581,10 @@ async def send_phone_update_otp(
     else:
         await OTP(phone=clean_new_phone, code=otp_code, user_type="employee").insert()
         
-    # 5. Send the SMS using your SMS service (Uncomment when ready)
-    # await SmsService.send_otp(clean_new_phone, otp_code)
-    
     return {
-            "status": "success",
-            "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
-        }
-
+        "status": "success",
+        "message": f"An OTP has been sent to {clean_new_phone}. Please verify to update your phone number."
+    }
 
 # --- STEP 2: Verify OTP and apply the update ---
 @router.patch("/profile/phone_no_update", status_code=status.HTTP_200_OK)
@@ -598,33 +592,24 @@ async def update_employee_phone(
     data: UpdatePhoneRequest,
     current_employee: Employee = Depends(get_current_employee)
 ):
-    """
-    Verifies the 4-digit OTP sent to the new phone number. 
-    If successful, updates the database and issues a new JWT token.
-    """
     clean_new_phone = data.new_phone[-10:]
 
-    # 1. VERIFY THE OTP FIRST
     otp_record = await OTP.find_one({"phone": clean_new_phone})
     if not otp_record or not otp_record.code or otp_record.code != data.otp_code:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Invalid or expired OTP for the new phone number."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP.")
 
-    # 2. Double-check if the new phone is already registered to someone else (Safety Net)
-    phone_taken = await Employer.find_one({"phone": clean_new_phone}) or await Employee.find_one({"phone": clean_new_phone})
+    # Double-check database lock at the time of verification across all roles
+    phone_taken = (
+        await Employee.find_one({"phone": clean_new_phone}) or 
+        await Employer.find_one({"phone": clean_new_phone}) or
+        await Admin.find_one({"phone": clean_new_phone})
+    )
     if phone_taken:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, 
-            detail="This phone number is already registered to another account."
-        )
+        raise HTTPException(status_code=409, detail="This phone number was just registered by another account.")
     
-    # 3. Consume/Invalidate the OTP so it cannot be reused
     otp_record.code = None 
     await otp_record.save()
 
-    # 4. Apply the new phone number to the employee record
     current_employee.phone = clean_new_phone
     await current_employee.save()
 
@@ -640,75 +625,68 @@ async def request_email_update_otp(
     data: EmailUpdateRequest,
     current_employee: Employee = Depends(get_current_employee)
 ):
-    """
-    Step 1: Takes the new email, validates it isn't in use, and sends an OTP to it.
-    """
     clean_email = data.email.lower().strip()
 
-    # 1. Check if the email is already in use by another account
-    existing_user = await Employee.find_one(Employee.email == clean_email)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="This email is already associated with another account.")
+    if current_employee.email and current_employee.email.lower() == clean_email:
+        raise HTTPException(status_code=400, detail="This is already your current email address.")
 
-    # 2. Generate OTP (or use 1234 if in DEV_MODE)
+    # Check Employee, Employer, and Admin collections
+    email_taken = (
+        await Employee.find_one({"email": clean_email}) or 
+        await Employer.find_one({"email": clean_email}) or
+        await Admin.find_one({"email": clean_email})
+    )
+    if email_taken:
+        raise HTTPException(status_code=409, detail="This email is already associated with another account.")
+
     DEV_MODE = True
     otp_code = "1234" if DEV_MODE else str(random.randint(1000, 9999))
 
-    # 3. THE FIX: Map the email to the 'phone' field to satisfy the OTP model requirement
-    await OTP(
-        phone=clean_email, 
-        code=otp_code, 
-        user_type="employee"
-    ).insert()
+    await OTP(phone=clean_email, code=otp_code, user_type="employee").insert()
 
     return {
         "status": "success",
         "message": f"An OTP has been sent to {clean_email}. Please verify to update your email."
     }
 
-
+# --- STEP 2: Verify OTP and apply the update ---
 @router.patch("/profile/email/verify_and_update", response_model=dict)
 async def verify_and_update_email(
     data: VerifyEmailUpdateRequest,
     current_employee: Employee = Depends(get_current_employee)
 ):
-    """
-    Step 2: Verifies the OTP. If valid, updates the user's email and marks it as verified.
-    """
     clean_email = data.email.lower().strip()
 
-    # ==========================================
-    # 1. VERIFY OTP (Manual check to avoid OTPService phone-slicing logic)
-    # ==========================================
     DEV_MODE = True
     MASTER_OTP = "1234"
 
     if DEV_MODE and data.otp_code == MASTER_OTP:
-        print(f"⚠️ DEV BYPASS USED: Email updated to {clean_email}")
+        pass
     else:
-        # Check the OTP collection where we stored the email in the phone field
         otp_record = await OTP.find_one(OTP.phone == clean_email)
-        
         if not otp_record or otp_record.code != data.otp_code:
             raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
-            
-        # Consume (delete) the OTP
         await otp_record.delete()
-    # ==========================================
 
-    # 2. UPDATE THE EMPLOYEE FIELDS
+    # Double-check database lock at the time of verification across all roles
+    email_taken = (
+        await Employee.find_one({"email": clean_email}) or 
+        await Employer.find_one({"email": clean_email}) or
+        await Admin.find_one({"email": clean_email})
+    )
+    if email_taken:
+        raise HTTPException(status_code=409, detail="This email was just registered by another account.")
+
     current_employee.email = clean_email
     current_employee.email_verified = True 
 
-    # 3. RECALCULATE PROFILE SCORE
     if not current_employee.metadata:
-        from app.models.employee import ProfileMetadata # Adjust import if needed
+        from app.models.employee import ProfileMetadata 
         current_employee.metadata = ProfileMetadata()
         
     current_employee.metadata.profile_completion = calculate_profile_completion(current_employee)
     current_employee.metadata.updated_at = datetime.now(timezone.utc)
 
-    # 4. SAVE TO DATABASE
     await current_employee.save()
 
     return {
